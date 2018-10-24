@@ -119,7 +119,11 @@ type Event struct {
 	hash    []byte
 	hex     string
 
-	FlagTable []byte // FlagTable stores connection information
+	// FlagTable stores connection information.
+	FlagTable []byte
+
+	// If the event is a witness, then stores the roots that it sees.
+	WitnessProof []string
 }
 
 // NewEvent creates new block event.
@@ -307,6 +311,11 @@ func (e *Event) ToWire() WireEvent {
 		Signature: e.Signature,
 		FlagTable: e.FlagTable,
 	}
+}
+
+func (e *Event) ReplaceFlagTable(flagTable map[string]int) (err error) {
+	e.FlagTable, err = json.Marshal(flagTable)
+	return err
 }
 
 // GetFlagTable returns the flag table.

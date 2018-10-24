@@ -297,6 +297,38 @@ func (p *Poset) witness(x string) (bool, error) {
 	return xRound > spRound, nil
 }
 
+//true if x is a witness (first event of a round for the owner)
+func (p *Poset) witness2(ex *Event) (bool, error) {
+	xRound, err := p.getRound(ex)
+	if err != nil {
+		return false, err
+	}
+
+	var spRound int
+
+	// If event is root, then set round and store event.
+	rootsBySelfParent, err := p.Store.RootsBySelfParent()
+	if err != nil {
+		return false, err
+	}
+
+	if r, ok := rootsBySelfParent[ex.SelfParent()]; ok {
+		spRound = r.SelfParent.Round
+	} else {
+		ey, err := p.Store.GetEvent(ex.SelfParent())
+		if err != nil {
+			return false, err
+		}
+
+		spRound, err = p.getRound(&ey)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	return xRound > spRound, nil
+}
+
 func (p *Poset) roundReceived(x string) (int, error) {
 
 	ex, err := p.Store.GetEvent(x)
@@ -773,6 +805,267 @@ func (p *Poset) InsertEvent(event Event, setWireInfo bool) error {
 	return nil
 }
 
+func (p *Poset) getRound(event *Event) (int, error) {
+	// If known round, then set round and store event.
+	if c, ok := p.roundCache.Get(event.Hex()); ok {
+		return c.(int), nil
+
+	}
+
+	// If event is root, then set round and store event.
+	rootsBySelfParent, err := p.Store.RootsBySelfParent()
+	if err != nil {
+		return 0, err
+	}
+
+	if r, ok := rootsBySelfParent[event.Hex()]; ok {
+		return r.SelfParent.Round, nil
+	}
+
+	// If event is directly attached to root, then set round and store event.
+	root, err := p.Store.GetRoot(event.Creator())
+	if err != nil {
+		return 0, err
+	}
+
+	if event.SelfParent() == root.SelfParent.Hash {
+		other, ok := root.Others[event.Hex()]
+		if event.OtherParent() == "" ||
+			(ok && other.Hash == event.OtherParent()) {
+			return root.NextRound, nil
+		}
+	}
+
+	// The Event's parents are "normal" Events.
+	spEvent, err := p.Store.GetEvent(event.SelfParent())
+	if err != nil {
+		return 0, err
+	}
+
+	parentRound, err := p.getRound(&spEvent)
+	if err != nil {
+		return 0, err
+	}
+
+	if event.OtherParent() != "" {
+		var opRound int
+		//XXX
+		other, ok := root.Others[event.Hex()]
+		if ok && other.Hash == event.OtherParent() {
+			opRound = root.NextRound
+		} else {
+			opEvent, err := p.Store.GetEvent(event.OtherParent())
+			if err != nil {
+				return 0, err
+			}
+
+			opRound, err = p.getRound(&opEvent)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		if opRound > parentRound {
+			parentRound = opRound
+		}
+	}
+
+	proof := 0
+
+	// check is already a witness?
+	if len(event.WitnessProof) != 0 {
+		for _, rootCandidate := range event.WitnessProof {
+			for _, knownRoot := range p.Store.RoundWitnesses(parentRound) {
+				if rootCandidate == knownRoot {
+					proof++
+				}
+			}
+		}
+	}
+	if proof >= p.superMajority {
+		parentRound++
+		return parentRound, nil
+	}
+
+	// check whether this event a witness.
+	ft, err := event.GetFlagTable()
+	if err != nil {
+		return 0, err
+	}
+
+	maxRound := parentRound
+	roots := make(map[int][]string)
+
+	for hash := range ft {
+		root, err := p.Store.GetEvent(hash)
+		if err != nil {
+			continue
+		}
+
+		round, err := p.getRound(&root)
+		if err != nil {
+			continue
+		}
+
+		// check event is first event
+		// If event is root, then set round and store event.
+		if _, ok := rootsBySelfParent[root.SelfParent()]; ok {
+			roots[round] = append(roots[round], root.Hex())
+			continue
+		}
+
+		sParent, err := p.Store.GetEvent(root.SelfParent())
+		if err != nil {
+			continue
+		}
+
+		spRound, err := p.getRound(&sParent)
+		if err != nil {
+			continue
+		}
+
+		if round <= spRound {
+			continue
+		}
+
+		if round < maxRound {
+			continue
+		}
+
+		roots[round] = append(roots[round], root.Hex())
+	}
+
+	wc := 0
+
+	for _, v := range roots[maxRound] {
+		sees, err := p.see(event.Hex(), v)
+		if err != nil && !sees {
+			continue
+		}
+		wc++
+	}
+
+	currentRound := parentRound
+
+	if wc >= p.superMajority {
+		currentRound = parentRound + 1
+
+		if err := p.updateNewWitness(
+			event, currentRound, parentRound); err != nil {
+			return 0, err
+		}
+	}
+
+	return currentRound, nil
+}
+
+func (p *Poset) updateNewWitness(
+	event *Event, currentRound, parentRound int) error {
+	// check whether this event a witness.
+	ft, err := event.GetFlagTable()
+	if err != nil {
+		return err
+	}
+
+	var proofRoots []string
+	var roundRoots []string
+
+	for hash := range ft {
+		root, err := p.Store.GetEvent(hash)
+		if err != nil {
+			continue
+		}
+
+		round, err := p.getRound(&root)
+		if err != nil {
+			continue
+		}
+
+		if round == parentRound {
+			proofRoots = append(proofRoots, root.Hex())
+		} else if round == currentRound {
+			roundRoots = append(roundRoots, root.Hex())
+		}
+	}
+	roundRoots = append(roundRoots, event.Hex())
+
+	// TODO: [maxim] Roll back mechanism.
+
+	// Replace flag table to new witness event block.
+	flagTable := make(map[string]int)
+	for _, v := range roundRoots {
+		flagTable[v] = 1
+	}
+
+	event.WitnessProof = proofRoots
+
+	return event.ReplaceFlagTable(flagTable)
+}
+
+func (p *Poset) DivideRounds2() error {
+	for _, hash := range p.UndeterminedEvents {
+		event, err := p.Store.GetEvent(hash)
+		if err != nil {
+			return err
+		}
+
+		var updateEvent bool
+
+		if event.round == nil {
+			roundNumber, err := p.getRound(&event)
+			if err != nil {
+				return err
+			}
+
+			event.SetRound(roundNumber)
+			updateEvent = true
+
+			roundInfo, err := p.Store.GetRound(roundNumber)
+			if err != nil && !common.Is(err, common.KeyNotFound) {
+				return err
+			}
+
+			if !roundInfo.queued &&
+				(p.LastConsensusRound == nil ||
+					roundNumber >= *p.LastConsensusRound) {
+
+				p.PendingRounds = append(p.PendingRounds, &pendingRound{roundNumber, false})
+				roundInfo.queued = true
+			}
+
+			witness, err := p.witness2(&event)
+			if err != nil {
+				return err
+			}
+
+			roundInfo.AddEvent(hash, witness)
+
+			err = p.Store.SetRound(roundNumber, roundInfo)
+			if err != nil {
+				return err
+			}
+		}
+
+		// Compute the Event's lamport timestamp.
+		if event.lamportTimestamp == nil {
+
+			lamportTimestamp, err := p.lamportTimestamp(hash)
+			if err != nil {
+				return err
+			}
+
+			event.SetLamportTimestamp(lamportTimestamp)
+			updateEvent = true
+		}
+
+		if updateEvent {
+			p.Store.SetEvent(event)
+		}
+	}
+
+	return nil
+}
+
 /*
 DivideRounds assigns a Round and LamportTimestamp to Events, and flags them as
 witnesses if necessary. Pushes Rounds in the PendingRounds queue if necessary.
@@ -856,6 +1149,7 @@ func (p *Poset) DivideRounds() error {
 		if updateEvent {
 			p.Store.SetEvent(ev)
 		}
+
 	}
 
 	return nil
@@ -1405,7 +1699,7 @@ func (p *Poset) Bootstrap() error {
 		}
 
 		//Compute the consensus order of Events
-		if err := p.DivideRounds(); err != nil {
+		if err := p.DivideRounds2(); err != nil {
 			return err
 		}
 		if err := p.DecideFame(); err != nil {

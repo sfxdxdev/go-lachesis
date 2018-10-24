@@ -365,7 +365,7 @@ func (c *Core) AddSelfEventBlock(otherHead string) error {
 	}
 	otherParentEvent, errOther := c.poset.Store.GetEvent(otherHead)
 	if errOther != nil {
-		c.logger.Warnf("failed to get  other parent: %s", errOther)
+		c.logger.Warnf("failed to get other parent: %s", errOther)
 	}
 
 	var (
@@ -431,7 +431,7 @@ func (c *Core) ToWire(events []poset.Event) ([]poset.WireEvent, error) {
 
 func (c *Core) RunConsensus() error {
 	start := time.Now()
-	err := c.poset.DivideRounds()
+	err := c.poset.DivideRounds2()
 	c.logger.WithField("Duration", time.Since(start).Nanoseconds()).Debug("c.poset.DivideAtropos()")
 	if err != nil {
 		c.logger.WithField("Error", err).Error("c.poset.DivideAtropos()")

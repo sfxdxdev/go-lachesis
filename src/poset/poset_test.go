@@ -73,6 +73,7 @@ type play struct {
 	name        string
 	txPayload   [][]byte
 	sigPayload  []BlockSignature
+	knownRoots  []string
 }
 
 func testLogger(t testing.TB) *logrus.Entry {
@@ -104,13 +105,17 @@ func initPosetNodes(n int) ([]TestNode, map[string]string, *[]Event, *peers.Peer
 	return nodes, index, orderedEvents, participants
 }
 
-func playEvents(plays []play, nodes []TestNode, index map[string]string, orderedEvents *[]Event) {
+func playEvents(plays []play, nodes []TestNode,
+	index map[string]string, orderedEvents *[]Event) {
 	for _, p := range plays {
-		e := NewEvent(p.txPayload,
-			p.sigPayload,
+		ft := make(map[string]int)
+		for k := range p.knownRoots {
+			ft[index[p.knownRoots[k]]] = 1
+		}
+
+		e := NewEvent(p.txPayload, p.sigPayload,
 			[]string{index[p.selfParent], index[p.otherParent]},
-			nodes[p.to].Pub,
-			p.index, nil)
+			nodes[p.to].Pub, p.index, ft)
 
 		nodes[p.to].signAndAddEvent(e, p.name, index, orderedEvents)
 	}
@@ -144,7 +149,7 @@ func initPosetFull(plays []play, db bool, n int, logger *logrus.Entry) (*Poset, 
 
 	// Needed to have sorted nodes based on participants hash32
 	for i, peer := range participants.ToPeerSlice() {
-		event := NewEvent(nil, nil, []string{rootSelfParent(peer.ID), ""}, nodes[i].Pub, 0, nil)
+		event := NewEvent(nil, nil, []string{rootSelfParent(peer.ID), ""}, nodes[i].Pub, 0, map[string]int{rootSelfParent(peer.ID): 1})
 		nodes[i].signAndAddEvent(event, fmt.Sprintf("e%d", i), index, orderedEvents)
 	}
 
@@ -173,12 +178,12 @@ e0  e1  e2
 */
 func initPoset(t *testing.T) (*Poset, map[string]string) {
 	plays := []play{
-		{0, 1, "e0", "e1", "e01", nil, nil},
-		{2, 1, "e2", "", "s20", nil, nil},
-		{1, 1, "e1", "", "s10", nil, nil},
-		{0, 2, "e01", "", "s00", nil, nil},
-		{2, 2, "s20", "s00", "e20", nil, nil},
-		{1, 2, "s10", "e20", "e12", nil, nil},
+		{0, 1, "e0", "e1", "e01", nil, nil, []string{"e0", "e1"}},
+		{2, 1, "e2", "", "s20", nil, nil, []string{"e2"}},
+		{1, 1, "e1", "", "s10", nil, nil, []string{"e1"}},
+		{0, 2, "e01", "", "s00", nil, nil, []string{"e0", "e1"}},
+		{2, 2, "s20", "s00", "e20", nil, nil, []string{"e0", "e1", "e2"}},
+		{1, 2, "s10", "e20", "e12", nil, nil, []string{"e0", "e1", "e2"}},
 	}
 
 	h, index, orderedEvents := initPosetFull(plays, false, n, testLogger(t))
@@ -417,14 +422,14 @@ e0  e1  e2
 
 func initRoundPoset(t *testing.T) (*Poset, map[string]string) {
 	plays := []play{
-		{1, 1, "e1", "e0", "e10", nil, nil},
-		{2, 1, "e2", "", "s20", nil, nil},
-		{0, 1, "e0", "", "s00", nil, nil},
-		{2, 2, "s20", "e10", "e21", nil, nil},
-		{0, 2, "s00", "e21", "e02", nil, nil},
-		{1, 2, "e10", "", "s10", nil, nil},
-		{1, 3, "s10", "e02", "f1", nil, nil},
-		{1, 4, "f1", "", "s11", [][]byte{[]byte("abc")}, nil},
+		{1, 1, "e1", "e0", "e10", nil, nil, []string{"e0", "e1"}},
+		{2, 1, "e2", "", "s20", nil, nil, []string{"e2"}},
+		{0, 1, "e0", "", "s00", nil, nil, []string{"e0"}},
+		{2, 2, "s20", "e10", "e21", nil, nil, []string{"e0", "e1", "e2"}},
+		{0, 2, "s00", "e21", "e02", nil, nil, []string{"e0", "e21"}},
+		{1, 2, "e10", "", "s10", nil, nil, []string{"e0", "e1"}},
+		{1, 3, "s10", "e02", "f1", nil, nil, []string{"e21", "e02", "e1"}},
+		{1, 4, "f1", "", "s11", [][]byte{[]byte("abc")}, nil, []string{"e21", "e02", "f1"}},
 	}
 
 	h, index, _ := initPosetFull(plays, false, n, testLogger(t))
@@ -742,12 +747,12 @@ func TestRoundDiff(t *testing.T) {
 func TestDivideRounds(t *testing.T) {
 	h, index := initRoundPoset(t)
 
-	if err := h.DivideRounds(); err != nil {
+	if err := h.DivideRounds2(); err != nil {
 		t.Fatal(err)
 	}
 
-	if l := h.Store.LastRound(); l != 1 {
-		t.Fatalf("last round should be 1 not %d", l)
+	if l := h.Store.LastRound(); l != 2 {
+		t.Fatalf("last round should be 2 not %d", l)
 	}
 
 	round0, err := h.Store.GetRound(0)
@@ -771,11 +776,20 @@ func TestDivideRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l := len(round1.Witnesses()); l != 1 {
+	if l := len(round1.Witnesses()); l != 3 {
 		t.Fatalf("round 1 should have 1 witness, not %d", l)
 	}
 	if !contains(round1.Witnesses(), index["f1"]) {
 		t.Fatalf("round 1 witnesses should contain f1")
+	}
+
+	round2, err := h.Store.GetRound(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if l := len(round2.Witnesses()); l != 1 {
+		t.Fatalf("round 1 should have 1 witness, not %d", l)
 	}
 
 	expectedPendingRounds := []pendingRound{
@@ -785,6 +799,9 @@ func TestDivideRounds(t *testing.T) {
 		},
 		{
 			Index:   1,
+			Decided: false,
+		}, {
+			Index:   2,
 			Decided: false,
 		},
 	}
@@ -805,11 +822,11 @@ func TestDivideRounds(t *testing.T) {
 		"s00": {1, 0},
 		"e10": {1, 0},
 		"s20": {1, 0},
-		"e21": {2, 0},
-		"e02": {3, 0},
+		"e21": {2, 1},
+		"e02": {3, 1},
 		"s10": {2, 0},
 		"f1":  {4, 1},
-		"s11": {5, 1},
+		"s11": {5, 2},
 	}
 
 	for e, et := range expectedTimestamps {
@@ -904,10 +921,10 @@ func initDentedPoset(t *testing.T) (*Poset, map[string]string) {
 	}
 
 	plays := []play{
-		{0, 0, rootSelfParent(orderedPeers[0].ID), "", "e0", nil, nil},
-		{2, 0, rootSelfParent(orderedPeers[2].ID), "", "e2", nil, nil},
-		{0, 1, "e0", "", "e01", nil, nil},
-		{1, 0, rootSelfParent(orderedPeers[1].ID), "e2", "e12", nil, nil},
+		{0, 0, rootSelfParent(orderedPeers[0].ID), "", "e0", nil, nil, []string{}},
+		{2, 0, rootSelfParent(orderedPeers[2].ID), "", "e2", nil, nil, []string{}},
+		{0, 1, "e0", "", "e01", nil, nil, []string{}},
+		{1, 0, rootSelfParent(orderedPeers[1].ID), "e2", "e12", nil, nil, []string{}},
 	}
 
 	playEvents(plays, nodes, index, orderedEvents)
@@ -1005,9 +1022,9 @@ func TestInsertEventsWithBlockSignatures(t *testing.T) {
 			0   1    2
 		*/
 		plays := []play{
-			{1, 1, "e1", "e0", "e10", nil, []BlockSignature{blockSigs[1]}},
-			{2, 1, "e2", "", "s20", nil, []BlockSignature{blockSigs[2]}},
-			{0, 1, "e0", "", "s00", nil, []BlockSignature{blockSigs[0]}},
+			{1, 1, "e1", "e0", "e10", nil, []BlockSignature{blockSigs[1]}, []string{}},
+			{2, 1, "e2", "", "s20", nil, []BlockSignature{blockSigs[2]}, []string{}},
+			{0, 1, "e0", "", "s00", nil, []BlockSignature{blockSigs[0]}, []string{}},
 		}
 
 		for _, p := range plays {
@@ -1056,7 +1073,7 @@ func TestInsertEventsWithBlockSignatures(t *testing.T) {
 			Index:     1,
 			Signature: sig.Signature,
 		}
-		p := play{2, 2, "s20", "e10", "e21", nil, []BlockSignature{unknownBlockSig}}
+		p := play{2, 2, "s20", "e10", "e21", nil, []BlockSignature{unknownBlockSig}, []string{}}
 
 		e := NewEvent(nil,
 			p.sigPayload,
@@ -1087,7 +1104,7 @@ func TestInsertEventsWithBlockSignatures(t *testing.T) {
 		badNode := NewTestNode(key, 666)
 		badNodeSig, _ := block.Sign(badNode.Key)
 
-		p := play{0, 2, "s00", "e21", "e02", nil, []BlockSignature{badNodeSig}}
+		p := play{0, 2, "s00", "e21", "e02", nil, []BlockSignature{badNodeSig}, []string{}}
 
 		e := NewEvent(nil,
 			p.sigPayload,
@@ -1170,34 +1187,34 @@ func TestInsertEventsWithBlockSignatures(t *testing.T) {
 */
 func initConsensusPoset(db bool, t testing.TB) (*Poset, map[string]string) {
 	plays := []play{
-		{1, 1, "e1", "e0", "e10", nil, nil},
-		{2, 1, "e2", "e10", "e21", [][]byte{[]byte("e21")}, nil},
-		{2, 2, "e21", "", "e21b", nil, nil},
-		{0, 1, "e0", "e21b", "e02", nil, nil},
-		{1, 2, "e10", "e02", "f1", nil, nil},
-		{1, 3, "f1", "", "f1b", [][]byte{[]byte("f1b")}, nil},
-		{0, 2, "e02", "f1b", "f0", nil, nil},
-		{2, 3, "e21b", "f1b", "f2", nil, nil},
-		{1, 4, "f1b", "f0", "f10", nil, nil},
-		{0, 3, "f0", "e21", "f0x", nil, nil},
-		{2, 4, "f2", "f10", "f21", nil, nil},
-		{0, 4, "f0x", "f21", "f02", nil, nil},
-		{0, 5, "f02", "", "f02b", [][]byte{[]byte("f02b")}, nil},
-		{1, 5, "f10", "f02b", "g1", nil, nil},
-		{0, 6, "f02b", "g1", "g0", nil, nil},
-		{2, 5, "f21", "g1", "g2", nil, nil},
-		{1, 6, "g1", "g0", "g10", [][]byte{[]byte("g10")}, nil},
-		{2, 6, "g2", "g10", "g21", nil, nil},
-		{0, 7, "g0", "g21", "g02", [][]byte{[]byte("g02")}, nil},
-		{1, 7, "g10", "g02", "h1", nil, nil},
-		{0, 8, "g02", "h1", "h0", nil, nil},
-		{2, 7, "g21", "h1", "h2", nil, nil},
-		{1, 8, "h1", "h0", "h10", nil, nil},
-		{2, 8, "h2", "h10", "h21", nil, nil},
-		{0, 9, "h0", "h21", "h02", nil, nil},
-		{1, 9, "h10", "h02", "i1", nil, nil},
-		{0, 10, "h02", "i1", "i0", nil, nil},
-		{2, 9, "h21", "i1", "i2", nil, nil},
+		{1, 1, "e1", "e0", "e10", nil, nil, []string{}},
+		{2, 1, "e2", "e10", "e21", [][]byte{[]byte("e21")}, nil, []string{}},
+		{2, 2, "e21", "", "e21b", nil, nil, []string{}},
+		{0, 1, "e0", "e21b", "e02", nil, nil, []string{}},
+		{1, 2, "e10", "e02", "f1", nil, nil, []string{}},
+		{1, 3, "f1", "", "f1b", [][]byte{[]byte("f1b")}, nil, []string{}},
+		{0, 2, "e02", "f1b", "f0", nil, nil, []string{}},
+		{2, 3, "e21b", "f1b", "f2", nil, nil, []string{}},
+		{1, 4, "f1b", "f0", "f10", nil, nil, []string{}},
+		{0, 3, "f0", "e21", "f0x", nil, nil, []string{}},
+		{2, 4, "f2", "f10", "f21", nil, nil, []string{}},
+		{0, 4, "f0x", "f21", "f02", nil, nil, []string{}},
+		{0, 5, "f02", "", "f02b", [][]byte{[]byte("f02b")}, nil, []string{}},
+		{1, 5, "f10", "f02b", "g1", nil, nil, []string{}},
+		{0, 6, "f02b", "g1", "g0", nil, nil, []string{}},
+		{2, 5, "f21", "g1", "g2", nil, nil, []string{}},
+		{1, 6, "g1", "g0", "g10", [][]byte{[]byte("g10")}, nil, []string{}},
+		{2, 6, "g2", "g10", "g21", nil, nil, []string{}},
+		{0, 7, "g0", "g21", "g02", [][]byte{[]byte("g02")}, nil, []string{}},
+		{1, 7, "g10", "g02", "h1", nil, nil, []string{}},
+		{0, 8, "g02", "h1", "h0", nil, nil, []string{}},
+		{2, 7, "g21", "h1", "h2", nil, nil, []string{}},
+		{1, 8, "h1", "h0", "h10", nil, nil, []string{}},
+		{2, 8, "h2", "h10", "h21", nil, nil, []string{}},
+		{0, 9, "h0", "h21", "h02", nil, nil, []string{}},
+		{1, 9, "h10", "h02", "i1", nil, nil, []string{}},
+		{0, 10, "h02", "i1", "i0", nil, nil, []string{}},
+		{2, 9, "h21", "i1", "i2", nil, nil, []string{}},
 	}
 
 	poset, index, _ := initPosetFull(plays, db, n, testLogger(t))
@@ -2038,36 +2055,36 @@ func initFunkyPoset(logger *logrus.Logger, full bool) (*Poset, map[string]string
 	}
 
 	plays := []play{
-		{2, 1, "w02", "w03", "a23", [][]byte{[]byte("a23")}, nil},
-		{1, 1, "w01", "a23", "a12", [][]byte{[]byte("a12")}, nil},
-		{0, 1, "w00", "", "a00", [][]byte{[]byte("a00")}, nil},
-		{1, 2, "a12", "a00", "a10", [][]byte{[]byte("a10")}, nil},
-		{2, 2, "a23", "a12", "a21", [][]byte{[]byte("a21")}, nil},
-		{3, 1, "w03", "a21", "w13", [][]byte{[]byte("w13")}, nil},
-		{2, 3, "a21", "w13", "w12", [][]byte{[]byte("w12")}, nil},
-		{1, 3, "a10", "w12", "w11", [][]byte{[]byte("w11")}, nil},
-		{0, 2, "a00", "w11", "w10", [][]byte{[]byte("w10")}, nil},
-		{2, 4, "w12", "w11", "b21", [][]byte{[]byte("b21")}, nil},
-		{3, 2, "w13", "b21", "w23", [][]byte{[]byte("w23")}, nil},
-		{1, 4, "w11", "w23", "w21", [][]byte{[]byte("w21")}, nil},
-		{0, 3, "w10", "", "b00", [][]byte{[]byte("b00")}, nil},
-		{1, 5, "w21", "b00", "c10", [][]byte{[]byte("c10")}, nil},
-		{2, 5, "b21", "c10", "w22", [][]byte{[]byte("w22")}, nil},
-		{0, 4, "b00", "w22", "w20", [][]byte{[]byte("w20")}, nil},
-		{1, 6, "c10", "w20", "w31", [][]byte{[]byte("w31")}, nil},
-		{2, 6, "w22", "w31", "w32", [][]byte{[]byte("w32")}, nil},
-		{0, 5, "w20", "w32", "w30", [][]byte{[]byte("w30")}, nil},
-		{3, 3, "w23", "w32", "w33", [][]byte{[]byte("w33")}, nil},
-		{1, 7, "w31", "w33", "d13", [][]byte{[]byte("d13")}, nil},
-		{0, 6, "w30", "d13", "w40", [][]byte{[]byte("w40")}, nil},
-		{1, 8, "d13", "w40", "w41", [][]byte{[]byte("w41")}, nil},
-		{2, 7, "w32", "w41", "w42", [][]byte{[]byte("w42")}, nil},
-		{3, 4, "w33", "w42", "w43", [][]byte{[]byte("w43")}, nil},
+		{2, 1, "w02", "w03", "a23", [][]byte{[]byte("a23")}, nil, []string{}},
+		{1, 1, "w01", "a23", "a12", [][]byte{[]byte("a12")}, nil, []string{}},
+		{0, 1, "w00", "", "a00", [][]byte{[]byte("a00")}, nil, []string{}},
+		{1, 2, "a12", "a00", "a10", [][]byte{[]byte("a10")}, nil, []string{}},
+		{2, 2, "a23", "a12", "a21", [][]byte{[]byte("a21")}, nil, []string{}},
+		{3, 1, "w03", "a21", "w13", [][]byte{[]byte("w13")}, nil, []string{}},
+		{2, 3, "a21", "w13", "w12", [][]byte{[]byte("w12")}, nil, []string{}},
+		{1, 3, "a10", "w12", "w11", [][]byte{[]byte("w11")}, nil, []string{}},
+		{0, 2, "a00", "w11", "w10", [][]byte{[]byte("w10")}, nil, []string{}},
+		{2, 4, "w12", "w11", "b21", [][]byte{[]byte("b21")}, nil, []string{}},
+		{3, 2, "w13", "b21", "w23", [][]byte{[]byte("w23")}, nil, []string{}},
+		{1, 4, "w11", "w23", "w21", [][]byte{[]byte("w21")}, nil, []string{}},
+		{0, 3, "w10", "", "b00", [][]byte{[]byte("b00")}, nil, []string{}},
+		{1, 5, "w21", "b00", "c10", [][]byte{[]byte("c10")}, nil, []string{}},
+		{2, 5, "b21", "c10", "w22", [][]byte{[]byte("w22")}, nil, []string{}},
+		{0, 4, "b00", "w22", "w20", [][]byte{[]byte("w20")}, nil, []string{}},
+		{1, 6, "c10", "w20", "w31", [][]byte{[]byte("w31")}, nil, []string{}},
+		{2, 6, "w22", "w31", "w32", [][]byte{[]byte("w32")}, nil, []string{}},
+		{0, 5, "w20", "w32", "w30", [][]byte{[]byte("w30")}, nil, []string{}},
+		{3, 3, "w23", "w32", "w33", [][]byte{[]byte("w33")}, nil, []string{}},
+		{1, 7, "w31", "w33", "d13", [][]byte{[]byte("d13")}, nil, []string{}},
+		{0, 6, "w30", "d13", "w40", [][]byte{[]byte("w40")}, nil, []string{}},
+		{1, 8, "d13", "w40", "w41", [][]byte{[]byte("w41")}, nil, []string{}},
+		{2, 7, "w32", "w41", "w42", [][]byte{[]byte("w42")}, nil, []string{}},
+		{3, 4, "w33", "w42", "w43", [][]byte{[]byte("w43")}, nil, []string{}},
 	}
 	if full {
 		newPlays := []play{
-			{2, 8, "w42", "w43", "e23", [][]byte{[]byte("e23")}, nil},
-			{1, 9, "w41", "e23", "w51", [][]byte{[]byte("w51")}, nil},
+			{2, 8, "w42", "w43", "e23", [][]byte{[]byte("e23")}, nil, []string{}},
+			{1, 9, "w41", "e23", "w51", [][]byte{[]byte("w51")}, nil, []string{}},
 		}
 		plays = append(plays, newPlays...)
 	}
@@ -2490,27 +2507,27 @@ func initSparsePoset(logger *logrus.Logger) (*Poset, map[string]string) {
 	}
 
 	plays := []play{
-		{1, 1, "w01", "w00", "e10", [][]byte{[]byte("e10")}, nil},
-		{2, 1, "w02", "e10", "e21", [][]byte{[]byte("e21")}, nil},
-		{3, 1, "w03", "e21", "e32", [][]byte{[]byte("e32")}, nil},
-		{0, 1, "w00", "e32", "w10", [][]byte{[]byte("w10")}, nil},
-		{1, 2, "e10", "w10", "w11", [][]byte{[]byte("w11")}, nil},
-		{0, 2, "w10", "w11", "f01", [][]byte{[]byte("f01")}, nil},
-		{2, 2, "e21", "f01", "w12", [][]byte{[]byte("w12")}, nil},
-		{3, 2, "e32", "w12", "w13", [][]byte{[]byte("w13")}, nil},
-		{1, 3, "w11", "w13", "w21", [][]byte{[]byte("w21")}, nil},
-		{2, 3, "w12", "w21", "w22", [][]byte{[]byte("w22")}, nil},
-		{3, 3, "w13", "w22", "w23", [][]byte{[]byte("w23")}, nil},
-		{1, 4, "w21", "w23", "g13", [][]byte{[]byte("g13")}, nil},
-		{2, 4, "w22", "g13", "w32", [][]byte{[]byte("w32")}, nil},
-		{3, 4, "w23", "w32", "w33", [][]byte{[]byte("w33")}, nil},
-		{1, 5, "g13", "w33", "w31", [][]byte{[]byte("w31")}, nil},
-		{2, 5, "w32", "w31", "h21", [][]byte{[]byte("h21")}, nil},
-		{3, 5, "w33", "h21", "w43", [][]byte{[]byte("w43")}, nil},
-		{1, 6, "w31", "w43", "w41", [][]byte{[]byte("w41")}, nil},
-		{2, 6, "h21", "w41", "w42", [][]byte{[]byte("w42")}, nil},
-		{3, 6, "w43", "w42", "i32", [][]byte{[]byte("i32")}, nil},
-		{1, 7, "w41", "i32", "w51", [][]byte{[]byte("w51")}, nil},
+		{1, 1, "w01", "w00", "e10", [][]byte{[]byte("e10")}, nil, []string{}},
+		{2, 1, "w02", "e10", "e21", [][]byte{[]byte("e21")}, nil, []string{}},
+		{3, 1, "w03", "e21", "e32", [][]byte{[]byte("e32")}, nil, []string{}},
+		{0, 1, "w00", "e32", "w10", [][]byte{[]byte("w10")}, nil, []string{}},
+		{1, 2, "e10", "w10", "w11", [][]byte{[]byte("w11")}, nil, []string{}},
+		{0, 2, "w10", "w11", "f01", [][]byte{[]byte("f01")}, nil, []string{}},
+		{2, 2, "e21", "f01", "w12", [][]byte{[]byte("w12")}, nil, []string{}},
+		{3, 2, "e32", "w12", "w13", [][]byte{[]byte("w13")}, nil, []string{}},
+		{1, 3, "w11", "w13", "w21", [][]byte{[]byte("w21")}, nil, []string{}},
+		{2, 3, "w12", "w21", "w22", [][]byte{[]byte("w22")}, nil, []string{}},
+		{3, 3, "w13", "w22", "w23", [][]byte{[]byte("w23")}, nil, []string{}},
+		{1, 4, "w21", "w23", "g13", [][]byte{[]byte("g13")}, nil, []string{}},
+		{2, 4, "w22", "g13", "w32", [][]byte{[]byte("w32")}, nil, []string{}},
+		{3, 4, "w23", "w32", "w33", [][]byte{[]byte("w33")}, nil, []string{}},
+		{1, 5, "g13", "w33", "w31", [][]byte{[]byte("w31")}, nil, []string{}},
+		{2, 5, "w32", "w31", "h21", [][]byte{[]byte("h21")}, nil, []string{}},
+		{3, 5, "w33", "h21", "w43", [][]byte{[]byte("w43")}, nil, []string{}},
+		{1, 6, "w31", "w43", "w41", [][]byte{[]byte("w41")}, nil, []string{}},
+		{2, 6, "h21", "w41", "w42", [][]byte{[]byte("w42")}, nil, []string{}},
+		{3, 6, "w43", "w42", "i32", [][]byte{[]byte("i32")}, nil, []string{}},
+		{1, 7, "w41", "i32", "w51", [][]byte{[]byte("w51")}, nil, []string{}},
 	}
 
 	for _, p := range plays {
