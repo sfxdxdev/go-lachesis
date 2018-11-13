@@ -63,11 +63,16 @@ func compareBlocks(diff *Diff) bool {
 			return false
 		}
 
+		// NOTE: avoid StateHash before comparing, see https://github.com/andrecronje/lachesis/issues/42
+		bb0, bb1 := *b0.Body, *b1.Body
+		bb0.StateHash, bb1.StateHash = nil, nil
+		bb0.XXX_sizecache, bb1.XXX_sizecache = 0, 0
+
 		// NOTE: the same blocks Hashes are different because their Signatures.
 		// So, compare bodies only.
-		if !reflect.DeepEqual(b0.Body, b1.Body) {
+		if !reflect.DeepEqual(bb0, bb1) {
 			diff.FirstBlockIndex = i
-			diff.AddDescr(fmt.Sprintf("block:\n%+v \n!= \n%+v\n", b0.Body, b1.Body))
+			diff.AddDescr(fmt.Sprintf("block:\n%+v \n!= \n%+v\n", bb0, bb1))
 
 			diff.FirstRoundIndex = b0.RoundReceived()
 			if diff.FirstRoundIndex > b1.RoundReceived() {
