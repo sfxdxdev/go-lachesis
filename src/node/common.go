@@ -19,46 +19,63 @@ import (
 const delay = 100 * time.Millisecond
 
 // NodeList is a list of connected nodes for tests purposes
-type NodeList map[*ecdsa.PrivateKey]*Node
+type NodeList struct {
+	nodes map[*ecdsa.PrivateKey]*Node
+	evils map[*ecdsa.PrivateKey]*EvilNode
+}
 
 // NewNodeList makes, fills and runs NodeList instance
-func NewNodeList(count int, logger *logrus.Logger) NodeList {
-	nodes := make(NodeList, count)
+func NewNodeList(count int, evils int, logger *logrus.Logger) *NodeList {
+	list := &NodeList{
+		nodes: make(map[*ecdsa.PrivateKey]*Node, count),
+		evils: make(map[*ecdsa.PrivateKey]*EvilNode, evils),
+	}
 	participants := peers.NewPeers()
 
-	for i := 0; i < count; i++ {
+	for i := 0; i < (count + evils); i++ {
 		config := DefaultConfig()
 		addr, transp := net.NewInmemTransport("")
 		key, _ := crypto.GenerateECDSAKey()
 		pubKey := fmt.Sprintf("0x%X", crypto.FromECDSAPub(&key.PublicKey))
 		peer := peers.NewPeer(pubKey, addr)
-
-		n := NewNode(
-			config,
-			peer.ID,
-			key,
-			participants,
-			poset.NewInmemStore(participants, config.CacheSize),
-			transp,
-			dummy.NewInmemDummyApp(logger))
-
 		participants.AddPeer(peer)
-		nodes[key] = n
+		if i < count {
+			list.nodes[key] = NewNode(
+				config,
+				peer.ID,
+				key,
+				participants,
+				poset.NewInmemStore(participants, config.CacheSize),
+				transp,
+				dummy.NewInmemDummyApp(logger))
+		} else {
+			list.evils[key] = NewEvilNode(
+				config,
+				peer.ID,
+				key,
+				participants,
+				transp)
+		}
 	}
 
-	for _, n := range nodes {
+	for _, n := range list.nodes {
 		n.Init()
 		n.RunAsync(true)
 	}
 
-	return nodes
+	for _, e := range list.evils {
+		e.Init()
+		e.RunAsync(true)
+	}
+
+	return list
 }
 
 // Keys returns the all PrivateKeys slice
-func (n NodeList) Keys() []*ecdsa.PrivateKey {
-	keys := make([]*ecdsa.PrivateKey, len(n))
+func (l *NodeList) Keys() []*ecdsa.PrivateKey {
+	keys := make([]*ecdsa.PrivateKey, len(l.nodes))
 	i := 0
-	for key, _ := range n {
+	for key, _ := range l.nodes {
 		keys[i] = key
 		i++
 	}
@@ -66,10 +83,10 @@ func (n NodeList) Keys() []*ecdsa.PrivateKey {
 }
 
 // Values returns the all nodes slice
-func (n NodeList) Values() []*Node {
-	nodes := make([]*Node, len(n))
+func (l *NodeList) Values() []*Node {
+	nodes := make([]*Node, len(l.nodes))
 	i := 0
-	for _, node := range n {
+	for _, node := range l.nodes {
 		nodes[i] = node
 		i++
 	}
@@ -77,7 +94,7 @@ func (n NodeList) Values() []*Node {
 }
 
 // StartRandTxStream sends random txs to nodes until stop() called
-func (n NodeList) StartRandTxStream() (stop func()) {
+func (l *NodeList) StartRandTxStream() (stop func()) {
 	stopCh := make(chan struct{})
 
 	stop = func() {
@@ -91,11 +108,11 @@ func (n NodeList) StartRandTxStream() (stop func()) {
 			case <-stopCh:
 				return
 			case <-time.After(delay):
-				keys := n.Keys()
-				count := len(n)
+				keys := l.Keys()
+				count := len(l.nodes)
 				for i := 0; i < count; i++ {
 					j := rand.Intn(count)
-					node := n[keys[j]]
+					node := l.nodes[keys[j]]
 					tx := []byte(fmt.Sprintf("node#%d transaction %d", node.ID(), seq))
 					node.PushTx(tx)
 					seq++
@@ -108,11 +125,11 @@ func (n NodeList) StartRandTxStream() (stop func()) {
 }
 
 // WaitForBlock waits until the target block has retrieved a state hash from the app
-func (n NodeList) WaitForBlock(target int64) {
+func (l *NodeList) WaitForBlock(target int64) {
 LOOP:
 	for {
 		time.Sleep(delay)
-		for _, node := range n {
+		for _, node := range l.nodes {
 			if target > node.GetLastBlockIndex() {
 				continue LOOP
 			}
@@ -122,5 +139,15 @@ LOOP:
 			}
 		}
 		return
+	}
+}
+
+// Shutdown stops nodes goroutines
+func (l *NodeList) Shutdown() {
+	for _, e := range l.evils {
+		e.Shutdown()
+	}
+	for _, n := range l.nodes {
+		n.Shutdown()
 	}
 }
