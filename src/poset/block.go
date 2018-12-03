@@ -182,6 +182,9 @@ func (b *Block) Sign(privKey *ecdsa.PrivateKey) (bs BlockSignature, err error) {
 }
 
 func (b *Block) SetSignature(bs BlockSignature) error {
+	if b.Signatures == nil {
+		b.Signatures = make(map[string]string)
+	}
 	b.Signatures[bs.ValidatorHex()] = bs.Signature
 	return nil
 }
@@ -221,7 +224,6 @@ func ListBytesEquals(this [][]byte, that [][]byte) bool {
 	}
 	return true
 }
-
 
 func (this *BlockBody) Equals(that *BlockBody) bool {
 	return this.Index == that.Index &&

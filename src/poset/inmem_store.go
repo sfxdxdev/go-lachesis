@@ -53,11 +53,11 @@ func NewInmemStore(participants *peers.Peers, cacheSize int) *InmemStore {
 		store.rootsByParticipant[peer.PubKeyHex] = root
 		store.rootsBySelfParent = nil
 		store.RootsBySelfParent()
- 		old := store.participantEventsCache
+		old := store.participantEventsCache
 		store.participantEventsCache = NewParticipantEventsCache(cacheSize, participants)
 		store.participantEventsCache.Import(old)
 	})
- 	return store
+	return store
 }
 
 func (s *InmemStore) CacheSize() int {
@@ -244,7 +244,8 @@ func (s *InmemStore) GetBlock(index int64) (Block, error) {
 	if !ok {
 		return Block{}, cm.NewStoreErr("BlockCache", cm.KeyNotFound, strconv.FormatInt(index, 10))
 	}
-	return res.(Block), nil
+	value := protoCopy(res).(*Block)
+	return *value, nil
 }
 
 func (s *InmemStore) SetBlock(block Block) error {
@@ -253,7 +254,8 @@ func (s *InmemStore) SetBlock(block Block) error {
 	if err != nil && !cm.Is(err, cm.KeyNotFound) {
 		return err
 	}
-	s.blockCache.Add(index, block)
+
+	s.blockCache.Add(index, protoCopy(&block))
 	if index > s.lastBlock {
 		s.lastBlock = index
 	}

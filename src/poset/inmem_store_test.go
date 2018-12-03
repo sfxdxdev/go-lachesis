@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/golang/protobuf/proto"
+
 	"github.com/andrecronje/lachesis/src/crypto"
 	"github.com/andrecronje/lachesis/src/peers"
 )
@@ -68,7 +70,7 @@ func TestInmemEvents(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !reflect.DeepEqual(ev.Message.Body, rev.Message.Body) {
+				if !proto.Equal(ev.Message.Body, rev.Message.Body) {
 					t.Fatalf("events[%s][%d] should be %#v, not %#v", p, k, ev, rev)
 				}
 			}
@@ -208,7 +210,7 @@ func TestInmemBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if !reflect.DeepEqual(storedBlock, block) {
+		if !proto.Equal(&storedBlock, &block) {
 			t.Fatalf("Block and StoredBlock do not match")
 		}
 	})
