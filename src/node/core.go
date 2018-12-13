@@ -204,7 +204,6 @@ func (c *Core) SignAndInsertSelfEvent(event poset.Event) error {
 func (c *Core) InsertEvent(event poset.Event, setWireInfo bool) error {
 
 	c.logger.WithFields(logrus.Fields{
-		"event":      event,
 		"creator":    event.Creator(),
 		"selfParent": event.SelfParent(),
 		"index":      event.Index(),
@@ -289,7 +288,6 @@ func (c *Core) EventDiff(known map[int64]int64) (events []poset.Event, err error
 				return []poset.Event{}, err
 			}
 			c.logger.WithFields(logrus.Fields{
-				"event":      ev,
 				"creator":    ev.Creator(),
 				"selfParent": ev.SelfParent(),
 				"index":      ev.Index(),
@@ -317,12 +315,12 @@ func (c *Core) Sync(unknownEvents []poset.WireEvent) error {
 	otherHead := ""
 	// add unknown events
 	for k, we := range unknownEvents {
-		c.logger.WithFields(logrus.Fields{
-			"unknown_events": we,
-		}).Debug("unknownEvents")
 		ev, err := c.poset.ReadWireInfo(we)
 		if err != nil {
-			c.logger.WithField("EventBlock", we).Errorf("c.poset.ReadEventBlockInfo(we)")
+			c.logger.WithFields(logrus.Fields{
+				"EventBlock": we,
+				"err":        err,
+			}).Errorf("c.poset.ReadEventBlockInfo(we) err")
 			return err
 
 		}
