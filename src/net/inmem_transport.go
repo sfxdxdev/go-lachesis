@@ -9,6 +9,10 @@ import (
 	"github.com/rs/xid"
 )
 
+const (
+	InmemTransportTimeout = 100 * time.Millisecond
+)
+
 var (
 	inmemMedium     = make(map[string]*InmemTransport)
 	inmemMediumSync sync.RWMutex
@@ -37,7 +41,7 @@ func NewInmemTransport(addr string) (string, *InmemTransport) {
 	trans := &InmemTransport{
 		consumerCh: make(chan RPC, 16),
 		localAddr:  addr,
-		timeout:    50 * time.Millisecond,
+		timeout:    InmemTransportTimeout,
 	}
 
 	inmemMediumSync.Lock()
@@ -59,7 +63,7 @@ func (i *InmemTransport) LocalAddr() string {
 
 // Sync implements the Transport interface.
 func (i *InmemTransport) Sync(target string, args *SyncRequest, resp *SyncResponse) error {
-	rpcResp, err := i.makeRPC(target, args, nil, i.timeout)
+	rpcResp, err := i.makeRPC(target, args, nil)
 	if err != nil {
 		return err
 	}
@@ -72,7 +76,7 @@ func (i *InmemTransport) Sync(target string, args *SyncRequest, resp *SyncRespon
 
 // Sync implements the Transport interface.
 func (i *InmemTransport) EagerSync(target string, args *EagerSyncRequest, resp *EagerSyncResponse) error {
-	rpcResp, err := i.makeRPC(target, args, nil, i.timeout)
+	rpcResp, err := i.makeRPC(target, args, nil)
 	if err != nil {
 		return err
 	}
@@ -85,7 +89,7 @@ func (i *InmemTransport) EagerSync(target string, args *EagerSyncRequest, resp *
 
 // FastForward implements the Transport interface.
 func (i *InmemTransport) FastForward(target string, args *FastForwardRequest, resp *FastForwardResponse) error {
-	rpcResp, err := i.makeRPC(target, args, nil, i.timeout)
+	rpcResp, err := i.makeRPC(target, args, nil)
 	if err != nil {
 		return err
 	}
@@ -96,32 +100,39 @@ func (i *InmemTransport) FastForward(target string, args *FastForwardRequest, re
 	return nil
 }
 
-func (i *InmemTransport) makeRPC(target string, args interface{}, r io.Reader, timeout time.Duration) (rpcResp RPCResponse, err error) {
+func (i *InmemTransport) makeRPC(target string, args interface{}, r io.Reader) (rpcResp RPCResponse, err error) {
+	// "connect"
 	inmemMediumSync.RLock()
 	peer, ok := inmemMedium[target]
 	inmemMediumSync.RUnlock()
-
 	if !ok {
 		err = fmt.Errorf("failed to connect to peer: %v", target)
 		return
 	}
-
-	// Send the RPC over
+	// make request
 	respCh := make(chan RPCResponse)
-	peer.consumerCh <- RPC{
+	req := RPC{
 		Command:  args,
 		Reader:   r,
 		RespChan: respCh,
 	}
-
-	// Wait for a response
+	// send the RPC over
+	start := time.Now()
+	select {
+	case peer.consumerCh <- req:
+		break
+	case <-time.After(i.timeout):
+		err = fmt.Errorf("command timed out when request")
+		return
+	}
+	// wait for a response
 	select {
 	case rpcResp = <-respCh:
 		if rpcResp.Error != nil {
 			err = rpcResp.Error
 		}
-	case <-time.After(timeout):
-		err = fmt.Errorf("command timed out")
+	case <-time.After(i.timeout - time.Since(start)):
+		err = fmt.Errorf("command timed out when response")
 	}
 	return
 }
