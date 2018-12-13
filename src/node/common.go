@@ -16,7 +16,7 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
 
-const delay = 100 * time.Millisecond
+const delay = 10 * time.Millisecond
 
 // NodeList is a list of connected nodes for tests purposes
 type NodeList map[*ecdsa.PrivateKey]*Node
@@ -109,16 +109,37 @@ func (n NodeList) StartRandTxStream() (stop func()) {
 
 // WaitForBlock waits until the target block has retrieved a state hash from the app
 func (n NodeList) WaitForBlock(target int64) {
-LOOP:
+	n.waitForAll(func(node *Node) bool {
+		if target > node.GetLastBlockIndex() {
+			return false
+		}
+		block, _ := node.GetBlock(target)
+		return len(block.GetStateHash()) != 0
+	})
+}
+
+// WaitForConsensusTxsCount waits until the target block has retrieved a state hash from the app
+func (n NodeList) WaitForConsensusTxsCount(target uint64) {
+	n.waitForAll(func(node *Node) bool {
+		return node.GetConsensusTransactionsCount() >= target
+	})
+}
+
+// Close shutdowns all nodes
+func (n NodeList) Close() {
+	for _, node := range n {
+		node.Shutdown()
+	}
+}
+
+// waitForAll waits until completed() returns true for all nodes
+func (n NodeList) waitForAll(completed func(*Node) bool) {
+waiting:
 	for {
 		time.Sleep(delay)
 		for _, node := range n {
-			if target > node.GetLastBlockIndex() {
-				continue LOOP
-			}
-			block, _ := node.GetBlock(target)
-			if len(block.GetStateHash()) == 0 {
-				continue LOOP
+			if !completed(node) {
+				continue waiting
 			}
 		}
 		return
