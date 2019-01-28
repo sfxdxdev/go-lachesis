@@ -156,7 +156,7 @@ func (s *DB) GetState(addr common.Address, hash common.Hash) common.Hash {
 // GetProof returns the MerkleProof for a given Account.
 func (s *DB) GetProof(a common.Address) ([][]byte, error) {
 	var proof proofList
-	err := s.trie.Prove(crypto.Keccak256(a.Bytes()), 0, &proof)
+	err := s.trie.Prove(crypto.Keccak256(a[:]), 0, &proof)
 	return [][]byte(proof), err
 }
 
