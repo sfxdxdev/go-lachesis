@@ -1,20 +1,15 @@
 package peers
 
 import (
+	"bytes"
 	"sort"
 	"sync"
 
 	"github.com/Fantom-foundation/go-lachesis/src/common"
 )
 
-// PubKeyPeers map of peers sorted by public key
-type PubKeyPeers map[string]*Peer
-
-// IDPeers map of peers sorted by ID
-type IDPeers map[uint64]*Peer
-
-// AddressPeers maps address to peer
-type AddressPeers map[common.Address]*Peer
+// IdIndex map of peers sorted by ID
+type IdIndex map[common.Address]*Peer
 
 // Listener for listening for new peers joining
 type Listener func(*Peer)
@@ -23,10 +18,16 @@ type Listener func(*Peer)
 type Peers struct {
 	sync.RWMutex
 	Sorted    []*Peer
-	ByPubKey  PubKeyPeers
-	ByID      IDPeers
-	ByAddress AddressPeers
+	ByID      IdIndex
 	Listeners []Listener
+}
+
+// Len returns the length of peers
+func (p *Peers) Len() int {
+	p.RLock()
+	defer p.RUnlock()
+
+	return len(p.Sorted)
 }
 
 /* Constructors */
@@ -34,9 +35,7 @@ type Peers struct {
 // NewPeers creates a new peers struct
 func NewPeers() *Peers {
 	return &Peers{
-		ByPubKey:  make(PubKeyPeers),
-		ByID:      make(IDPeers),
-		ByAddress: make(AddressPeers),
+		ByID: make(IdIndex),
 	}
 }
 
@@ -58,15 +57,11 @@ func NewPeersFromSlice(source []*Peer) *Peers {
 // Add a peer without sorting the set.
 // Useful for adding a bunch of peers at the same time
 // This method is private and is not protected by mutex.
-// Handle with care
 func (p *Peers) addPeerRaw(peer *Peer) {
-	if peer.ID == 0 {
+	if peer.ID == PeerNIL {
 		peer.computeID()
 	}
-
-	p.ByPubKey[peer.PubKeyHex] = peer
 	p.ByID[peer.ID] = peer
-	p.ByAddress[peer.Address()] = peer
 }
 
 // AddPeer adds a peer to the peers struct
@@ -78,44 +73,37 @@ func (p *Peers) AddPeer(peer *Peer) {
 	p.EmitNewPeer(peer)
 }
 
-func (p *Peers) internalSort() {
-	res := []*Peer{}
-
-	for _, p := range p.ByPubKey {
-		res = append(res, p)
+func (p *Peers) unsortedSlice() []*Peer {
+	arr := make([]*Peer, 0, len(p.ByID))
+	for _, p := range p.ByID {
+		arr = append(arr, p)
 	}
+	return arr
+}
 
-	sort.Sort(ByID(res))
-
-	p.Sorted = res
+func (p *Peers) internalSort() {
+	arr := p.unsortedSlice()
+	sort.Sort(ByID(arr))
+	p.Sorted = arr
 }
 
 /* Remove Methods */
 
 // RemovePeer removes a peer from the peers struct
 func (p *Peers) RemovePeer(peer *Peer) {
+	if peer.ID == PeerNIL {
+		peer.computeID()
+	}
+
 	p.Lock()
 	defer p.Unlock()
 
-	if _, ok := p.ByPubKey[peer.PubKeyHex]; !ok {
+	if _, ok := p.ByID[peer.ID]; !ok {
 		return
 	}
 
-	delete(p.ByPubKey, peer.PubKeyHex)
 	delete(p.ByID, peer.ID)
-	delete(p.ByAddress, peer.Address())
-
 	p.internalSort()
-}
-
-// RemovePeerByPubKey removes a peer by their public key
-func (p *Peers) RemovePeerByPubKey(pubKey string) {
-	p.RemovePeer(p.ByPubKey[pubKey])
-}
-
-// RemovePeerByID removes a peer based on their ID
-func (p *Peers) RemovePeerByID(id uint64) {
-	p.RemovePeer(p.ByID[id])
 }
 
 /* ToSlice Methods */
@@ -127,37 +115,30 @@ func (p *Peers) ToPeerSlice() []*Peer {
 
 // ToPeerByUsedSlice sorted peers list
 func (p *Peers) ToPeerByUsedSlice() []*Peer {
-	res := []*Peer{}
-
-	for _, p := range p.ByPubKey {
-		res = append(res, p)
-	}
-
-	sort.Sort(ByUsed(res))
-	return res
+	arr := p.unsortedSlice()
+	sort.Sort(ByUsed(arr))
+	return arr
 }
 
-// ToPubKeySlice peers struct by public key
-func (p *Peers) ToPubKeySlice() []string {
+// ToPubKeySlice peers struct by public key.
+func (p *Peers) ToPubKeySlice() [][]byte {
 	p.RLock()
 	defer p.RUnlock()
 
-	res := []string{}
-
+	res := make([][]byte, 0, len(p.Sorted))
 	for _, peer := range p.Sorted {
-		res = append(res, peer.PubKeyHex)
+		res = append(res, peer.PubKey)
 	}
 
 	return res
 }
 
 // ToIDSlice peers struct by ID
-func (p *Peers) ToIDSlice() []uint64 {
+func (p *Peers) ToIDSlice() []common.Address {
 	p.RLock()
 	defer p.RUnlock()
 
-	res := []uint64{}
-
+	res := make([]common.Address, 0, len(p.Sorted))
 	for _, peer := range p.Sorted {
 		res = append(res, peer.ID)
 	}
@@ -179,46 +160,56 @@ func (p *Peers) EmitNewPeer(peer *Peer) {
 	}
 }
 
-/* Utilities */
+/*
+ * Staff
+ */
 
-// Len returns the length of peers
-func (p *Peers) Len() int {
-	p.RLock()
-	defer p.RUnlock()
-
-	return len(p.ByPubKey)
+// ExcludePeer is used to exclude a single peer from a list of peers.
+func ExcludePeer(peers []*Peer, peer string) (int, []*Peer) {
+	index := -1
+	otherPeers := make([]*Peer, 0, len(peers))
+	for i, p := range peers {
+		if p.NetAddr != peer && common.ToHex(p.PubKey) != peer {
+			otherPeers = append(otherPeers, p)
+		} else {
+			index = i
+		}
+	}
+	return index, otherPeers
 }
 
-// ByPubHex implements sort.Interface for Peers based on
-// the PubKeyHex field.
-type ByPubHex []*Peer
-
-func (a ByPubHex) Len() int      { return len(a) }
-func (a ByPubHex) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
-func (a ByPubHex) Less(i, j int) bool {
-	ai := a[i].PubKeyHex
-	aj := a[j].PubKeyHex
-	return ai < aj
+// ExcludePeers is used to exclude multiple peers from a list of peers.
+func ExcludePeers(peers []*Peer, local string, last string) []*Peer {
+	otherPeers := make([]*Peer, 0, len(peers))
+	for _, p := range peers {
+		if p.NetAddr != local &&
+			p.NetAddr != last &&
+			common.ToHex(p.PubKey) != local &&
+			common.ToHex(p.PubKey) != last {
+			otherPeers = append(otherPeers, p)
+		}
+	}
+	return otherPeers
 }
 
-// ByID sorted by ID peers list
+/*
+ * Sorting
+ */
+
+// ByID sorted by ID peers list.
 type ByID []*Peer
 
 func (a ByID) Len() int      { return len(a) }
 func (a ByID) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a ByID) Less(i, j int) bool {
-	ai := a[i].ID
-	aj := a[j].ID
-	return ai < aj
+	return bytes.Compare(a[i].ID[:], a[j].ID[:]) < 0
 }
 
-// ByUsed TODO
+// ByUsed sorted by Used peers list.
 type ByUsed []*Peer
 
 func (a ByUsed) Len() int      { return len(a) }
 func (a ByUsed) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a ByUsed) Less(i, j int) bool {
-	ai := a[i].Used
-	aj := a[j].Used
-	return ai > aj
+	return a[i].Used > a[j].Used
 }
