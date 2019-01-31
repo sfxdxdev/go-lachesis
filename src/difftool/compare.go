@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/node"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
@@ -26,7 +27,7 @@ func Compare(nodes ...*node.Node) (result Result) {
 func compare(n0, n1 *node.Node) (diff *Diff) {
 	diff = &Diff{
 		node: [2]*node.Node{n0, n1},
-		IDs:  [2]uint64{n0.ID(), n1.ID()},
+		IDs:  [2]common.Address{n0.ID(), n1.ID()},
 	}
 
 	if !compareBlocks(diff) {

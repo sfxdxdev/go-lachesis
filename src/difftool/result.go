@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/node"
 )
 
@@ -13,7 +14,7 @@ type Diff struct {
 	Err error `json:"-"`
 
 	node            [2]*node.Node `json:"-"`
-	IDs             [2]uint64
+	IDs             [2]common.Address
 	BlocksGap       int64 `json:",omitempty"`
 	FirstBlockIndex int64 `json:",omitempty"`
 	RoundGap        int64 `json:",omitempty"`
