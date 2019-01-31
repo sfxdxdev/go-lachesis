@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 )
 
@@ -12,10 +13,10 @@ func createDummyEventBody() EventBody {
 	body.Transactions = [][]byte{[]byte("abc"), []byte("def")}
 	body.InternalTransactions = []*InternalTransaction{}
 	body.Parents = [][]byte{[]byte("self"), []byte("other")}
-	body.Creator = []byte("public key")
+	body.CreatorPK = []byte("public key")
 	body.BlockSignatures = []*BlockSignature{
 		&BlockSignature{
-			Validator: body.Creator,
+			Validator: body.CreatorPK,
 			Index:     0,
 			Signature: "r|s",
 		},
@@ -48,8 +49,8 @@ func TestMarshallBody(t *testing.T) {
 	if !reflect.DeepEqual(body.Parents, newBody.Parents) {
 		t.Fatalf("Parents do not match. Expected %#v, got %#v", body.Parents, newBody.Parents)
 	}
-	if !reflect.DeepEqual(body.Creator, newBody.Creator) {
-		t.Fatalf("Creators do not match. Expected %#v, got %#v", body.Creator, newBody.Creator)
+	if !reflect.DeepEqual(body.CreatorPK, newBody.CreatorPK) {
+		t.Fatalf("Creators do not match. Expected %#v, got %#v", body.CreatorPK, newBody.CreatorPK)
 	}
 
 }
@@ -59,7 +60,7 @@ func TestSignEvent(t *testing.T) {
 	publicKeyBytes := crypto.FromECDSAPub(&privateKey.PublicKey)
 
 	body := createDummyEventBody()
-	body.Creator = publicKeyBytes
+	body.CreatorPK = publicKeyBytes
 
 	event := Event{Message: &EventMessage{Body: &body}}
 	if err := event.Sign(privateKey); err != nil {
@@ -80,7 +81,7 @@ func TestMarshallEvent(t *testing.T) {
 	publicKeyBytes := crypto.FromECDSAPub(&privateKey.PublicKey)
 
 	body := createDummyEventBody()
-	body.Creator = publicKeyBytes
+	body.CreatorPK = publicKeyBytes
 
 	event := Event{Message: &EventMessage{Body: &body}}
 	if err := event.Sign(privateKey); err != nil {
@@ -107,14 +108,14 @@ func TestWireEvent(t *testing.T) {
 	publicKeyBytes := crypto.FromECDSAPub(&privateKey.PublicKey)
 
 	body := createDummyEventBody()
-	body.Creator = publicKeyBytes
+	body.CreatorPK = publicKeyBytes
 
 	event := Event{Message: &EventMessage{Body: &body}}
 	if err := event.Sign(privateKey); err != nil {
 		t.Fatalf("Error signing Event: %s", err)
 	}
 
-	event.SetWireInfo(1, 66, 2, 67)
+	event.SetWireInfo(1, common.BytesToAddress([]byte{66}), 2, common.BytesToAddress([]byte{67}))
 
 	internalTransactions := make([]InternalTransaction, len(event.Message.Body.InternalTransactions))
 	for i, v := range event.Message.Body.InternalTransactions {
@@ -125,9 +126,9 @@ func TestWireEvent(t *testing.T) {
 			Transactions:         event.Message.Body.Transactions,
 			InternalTransactions: internalTransactions,
 			SelfParentIndex:      1,
-			OtherParentCreatorID: 66,
+			OtherParentCreatorID: common.BytesToAddress([]byte{66}).Bytes(),
 			OtherParentIndex:     2,
-			CreatorID:            67,
+			CreatorID:            common.BytesToAddress([]byte{67}).Bytes(),
 			Index:                event.Message.Body.Index,
 			BlockSignatures:      event.WireBlockSignatures(),
 		},

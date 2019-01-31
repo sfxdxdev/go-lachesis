@@ -2,9 +2,10 @@ package poset
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/golang/protobuf/proto"
+
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 )
 
 /*
@@ -65,11 +66,11 @@ ex 2:
 
 // NewBaseRootEvent creates a RootEvent corresponding to the the very beginning
 // of a Poset.
-func NewBaseRootEvent(creatorID uint64) RootEvent {
+func NewBaseRootEvent(creatorID common.Address) RootEvent {
 	hash := GenRootSelfParent(creatorID)
 	res := RootEvent{
 		Hash:             hash.Bytes(),
-		CreatorID:        creatorID,
+		CreatorID:        creatorID.Bytes(),
 		Index:            -1,
 		LamportTimestamp: -1,
 		Round:            -1,
@@ -80,10 +81,15 @@ func NewBaseRootEvent(creatorID uint64) RootEvent {
 // Equals compares two root events for equality
 func (re *RootEvent) Equals(that *RootEvent) bool {
 	return bytes.Equal(re.Hash, that.Hash) &&
-		re.CreatorID == that.CreatorID &&
+		bytes.Equal(re.CreatorID, that.CreatorID) &&
 		re.Index == that.Index &&
 		re.LamportTimestamp == that.LamportTimestamp &&
 		re.Round == that.Round
+}
+
+// GetAddress returns creator's address.
+func (root *RootEvent) CreatorAddress() common.Address {
+	return common.BytesToAddress(root.CreatorID)
 }
 
 // Root forms a base on top of which a participant's Events can be inserted. It
@@ -94,7 +100,7 @@ func (re *RootEvent) Equals(that *RootEvent) bool {
 // Root's Others.
 
 // NewBaseRoot initializes a Root object for a fresh Poset.
-func NewBaseRoot(creatorID uint64) Root {
+func NewBaseRoot(creatorID common.Address) Root {
 	rootEvent := NewBaseRootEvent(creatorID)
 	res := Root{
 		NextRound:  0,
@@ -142,8 +148,8 @@ func (root *Root) ProtoUnmarshal(data []byte) error {
 
 // GenRootSelfParent generates Event's parent hash from participant ID.
 // Use it for first Event only.
-func GenRootSelfParent(participantID uint64) (hash EventHash) {
-	bytes := []byte(fmt.Sprintf("Root%d", participantID))
+func GenRootSelfParent(participant common.Address) (hash EventHash) {
+	bytes := append([]byte("Root_"), participant.Bytes()...)
 	hash.Set(bytes)
 	return
 }

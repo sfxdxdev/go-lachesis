@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 )
 
 func TestEventHash(t *testing.T) {
@@ -28,7 +30,7 @@ func TestEventHash(t *testing.T) {
 func TestEventHashes(t *testing.T) {
 	assert := assert.New(t)
 
-	selfParent := GenRootSelfParent(999)
+	selfParent := GenRootSelfParent(common.Address{})
 	otherParent := EventHash{}
 	hh := EventHashes{selfParent, otherParent}
 

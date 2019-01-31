@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 )
@@ -19,10 +20,10 @@ func initBadgerStore(cacheSize int, t *testing.T) (*BadgerStore, []pub) {
 	for i := 0; i < n; i++ {
 		key, _ := crypto.GenerateECDSAKey()
 		pubKey := crypto.FromECDSAPub(&key.PublicKey)
-		peer := peers.NewPeer(fmt.Sprintf("0x%X", pubKey), "")
+		peer := peers.NewPeer(pubKey, "")
 		participants.AddPeer(peer)
 		participantPubs = append(participantPubs,
-			pub{peer.ID, key, pubKey, peer.PubKeyHex})
+			pub{peer.ID, key, pubKey})
 	}
 
 	os.RemoveAll("test_data")
@@ -51,9 +52,9 @@ func removeBadgerStore(store *BadgerStore, t *testing.T) {
 
 func createTestDB(dir string, t *testing.T) *BadgerStore {
 	participants := peers.NewPeersFromSlice([]*peers.Peer{
-		peers.NewPeer("0xAA", ""),
-		peers.NewPeer("0xBB", ""),
-		peers.NewPeer("0xCC", ""),
+		peers.NewPeer(common.FromHex("0xAA"), ""),
+		peers.NewPeer(common.FromHex("0xBB"), ""),
+		peers.NewPeer(common.FromHex("0xCC"), ""),
 	})
 
 	cacheSize := 100
@@ -133,13 +134,13 @@ func TestLoadBadgerStore(t *testing.T) {
 			badgerStore.participants.Len())
 	}
 
-	for dbP, dbPeer := range dbParticipants.ByPubKey {
-		peer, ok := badgerStore.participants.ByPubKey[dbP]
+	for id, p := range dbParticipants.ByID {
+		peer, ok := badgerStore.participants.ByID[id]
 		if !ok {
-			t.Fatalf("BadgerStore participants does not contains %s", dbP)
+			t.Fatalf("BadgerStore participants does not contains %s", id)
 		}
-		if peer.ID != dbPeer.ID {
-			t.Fatalf("participant %s ID should be %d, not %d", dbP, dbPeer.ID, peer.ID)
+		if peer.ID != p.ID {
+			t.Fatalf("participant %s ID should be %d, not %d", id, p.ID, peer.ID)
 		}
 	}
 
@@ -155,16 +156,20 @@ func TestDBEventMethods(t *testing.T) {
 	defer removeBadgerStore(store, t)
 
 	// insert events in db directly
-	events := make(map[string][]Event)
+	events := make(map[common.Address][]Event)
 	topologicalIndex := int64(0)
 	var topologicalEvents []Event
 	for _, p := range participants {
 		var items []Event
 		for k := int64(0); k < testSize; k++ {
 			event := NewEvent(
-				[][]byte{[]byte(fmt.Sprintf("%s_%d", p.hex[:5], k))},
+				[][]byte{
+					[]byte(fmt.Sprintf("%s_%d", string(p.pubKey[:5]), k)),
+				},
 				[]InternalTransaction{},
-				[]BlockSignature{{Validator: []byte("validator"), Index: 0, Signature: "r|s"}},
+				[]BlockSignature{
+					{Validator: []byte("validator"), Index: 0, Signature: "r|s"},
+				},
 				make(EventHashes, 2),
 				p.pubKey,
 				k, nil)
@@ -179,7 +184,7 @@ func TestDBEventMethods(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		events[p.hex] = items
+		events[p.id] = items
 	}
 
 	// check events where correctly inserted and can be retrieved
@@ -237,19 +242,19 @@ func TestDBEventMethods(t *testing.T) {
 	// check that participant events where correctly added
 	skipIndex := int64(-1) // do not skip any indexes
 	for _, p := range participants {
-		pEvents, err := store.dbParticipantEvents(p.hex, skipIndex)
+		pEvents, err := store.dbParticipantEvents(p.id, skipIndex)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if l := int64(len(pEvents)); l != testSize {
-			t.Fatalf("%s should have %d events, not %d", p.hex, testSize, l)
+			t.Fatalf("%s should have %d events, not %d", p.id.String(), testSize, l)
 		}
 
-		expectedEvents := events[p.hex][skipIndex+1:]
+		expectedEvents := events[p.id][skipIndex+1:]
 		for k, e := range expectedEvents {
 			if e.Hash() != pEvents[k] {
 				t.Fatalf("ParticipantEvents[%s][%d] should be %s, not %s",
-					p.hex, k, e.Hash(), pEvents[k])
+					p.id.String(), k, e.Hash(), pEvents[k])
 			}
 		}
 	}
@@ -261,7 +266,7 @@ func TestDBRoundMethods(t *testing.T) {
 	defer removeBadgerStore(store, t)
 
 	round := NewRoundCreated()
-	events := make(map[string]Event)
+	events := make(map[common.Address]Event)
 	for _, p := range participants {
 		event := NewEvent([][]byte{},
 			[]InternalTransaction{},
@@ -269,7 +274,7 @@ func TestDBRoundMethods(t *testing.T) {
 			make(EventHashes, 2),
 			p.pubKey,
 			0, nil)
-		events[p.hex] = event
+		events[p.id] = event
 		round.AddEvent(event.Hash(), true)
 	}
 
@@ -312,13 +317,13 @@ func TestDBParticipantMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for p, peer := range store.participants.ByPubKey {
-		dbPeer, ok := participantsFromDB.ByPubKey[p]
+	for id, peer := range store.participants.ByID {
+		dbPeer, ok := participantsFromDB.ByID[id]
 		if !ok {
-			t.Fatalf("DB does not contain participant %s", p)
+			t.Fatalf("DB does not contain participant %s", id)
 		}
 		if peer.ID != dbPeer.ID {
-			t.Fatalf("DB participant %s should have ID %d, not %d", p, peer.ID, dbPeer.ID)
+			t.Fatalf("DB participant %s should have ID %d, not %d", id, peer.ID, dbPeer.ID)
 		}
 	}
 }
@@ -375,19 +380,19 @@ func TestDBBlockMethods(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		val1Sig, ok := storedBlock.Signatures[participants[0].hex]
-		if !ok {
+		val1Sig, err := storedBlock.GetSignature(participants[0].pubKey)
+		if err != nil {
 			t.Fatalf("Validator1 signature not stored in block")
 		}
-		if val1Sig != sig1.Signature {
+		if val1Sig.Signature != sig1.Signature {
 			t.Fatal("Validator1 block signatures differ")
 		}
 
-		val2Sig, ok := storedBlock.Signatures[participants[1].hex]
-		if !ok {
+		val2Sig, err := storedBlock.GetSignature(participants[1].pubKey)
+		if err != nil {
 			t.Fatalf("Validator2 signature not stored in block")
 		}
-		if val2Sig != sig2.Signature {
+		if val2Sig.Signature != sig2.Signature {
 			t.Fatal("Validator2 block signatures differ")
 		}
 	})
@@ -400,19 +405,23 @@ func TestDBFrameMethods(t *testing.T) {
 
 	events := make([]*EventMessage, len(participants))
 	roots := make([]*Root, len(participants))
-	for id, p := range participants {
+	for i, p := range participants {
 		event := NewEvent(
-			[][]byte{[]byte(fmt.Sprintf("%s_%d", p.hex[:5], 0))},
+			[][]byte{
+				[]byte(fmt.Sprintf("%s_%d", string(p.id[:5]), 0)),
+			},
 			[]InternalTransaction{},
-			[]BlockSignature{{Validator: []byte("validator"), Index: 0, Signature: "r|s"}},
+			[]BlockSignature{
+				{Validator: []byte("validator"), Index: 0, Signature: "r|s"},
+			},
 			make(EventHashes, 2),
 			p.pubKey,
 			0, nil)
 		event.Sign(p.privKey)
-		events[id] = event.Message
+		events[i] = event.Message
 
-		root := NewBaseRoot(uint64(id))
-		roots[id] = &root
+		root := NewBaseRoot(p.id)
+		roots[i] = &root
 	}
 	frame := Frame{
 		Round:  1,
@@ -448,12 +457,12 @@ func TestBadgerEvents(t *testing.T) {
 	defer removeBadgerStore(store, t)
 
 	// insert event
-	events := make(map[string][]Event)
+	events := make(map[common.Address][]Event)
 	for _, p := range participants {
 		var items []Event
 		for k := int64(0); k < testSize; k++ {
 			event := NewEvent(
-				[][]byte{[]byte(fmt.Sprintf("%s_%d", p.hex[:5], k))},
+				[][]byte{[]byte(fmt.Sprintf("%s_%d", string(p.id[:5]), k))},
 				[]InternalTransaction{},
 				[]BlockSignature{{Validator: []byte("validator"), Index: 0, Signature: "r|s"}},
 				make(EventHashes, 2),
@@ -465,21 +474,21 @@ func TestBadgerEvents(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		events[p.hex] = items
+		events[p.id] = items
 	}
 
 	// check that events were correclty inserted
-	for p, evs := range events {
+	for id, evs := range events {
 		for k, ev := range evs {
 			rev, err := store.GetEventBlock(ev.Hash())
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !ev.Message.Body.Equals(rev.Message.Body) {
-				t.Fatalf("events[%s][%d].Body should be %#v, not %#v", p, k, ev, rev)
+				t.Fatalf("events[%s][%d].Body should be %#v, not %#v", id.String(), k, ev, rev)
 			}
 			if !reflect.DeepEqual(ev.Message.Signature, rev.Message.Signature) {
-				t.Fatalf("events[%s][%d].Signature should be %#v, not %#v", p, k, ev.Message.Signature, rev.Message.Signature)
+				t.Fatalf("events[%s][%d].Signature should be %#v, not %#v", id.String(), k, ev.Message.Signature, rev.Message.Signature)
 			}
 		}
 	}
@@ -487,38 +496,38 @@ func TestBadgerEvents(t *testing.T) {
 	// check retrieving events per participant
 	skipIndex := int64(-1) // do not skip any indexes
 	for _, p := range participants {
-		pEvents, err := store.ParticipantEvents(p.hex, skipIndex)
+		pEvents, err := store.ParticipantEvents(p.id, skipIndex)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if l := int64(len(pEvents)); l != testSize {
-			t.Fatalf("%s should have %d events, not %d", p.hex, testSize, l)
+			t.Fatalf("%s should have %d events, not %d", p.id.String(), testSize, l)
 		}
 
-		expectedEvents := events[p.hex][skipIndex+1:]
+		expectedEvents := events[p.id][skipIndex+1:]
 		for k, e := range expectedEvents {
 			if e.Hash() != pEvents[k] {
 				t.Fatalf("ParticipantEvents[%s][%d] should be %s, not %s",
-					p.hex, k, e.Hash(), pEvents[k])
+					p.id.String(), k, e.Hash(), pEvents[k])
 			}
 		}
 	}
 
 	// check retrieving participant last
 	for _, p := range participants {
-		last, _, err := store.LastEventFrom(p.hex)
+		last, _, err := store.LastEventFrom(p.id)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		evs := events[p.hex]
+		evs := events[p.id]
 		expectedLast := evs[len(evs)-1].Hash()
 		if last != expectedLast {
-			t.Fatalf("%s last should be %s, not %s", p.hex, expectedLast.String(), last.String())
+			t.Fatalf("%s last should be %s, not %s", p.id.String(), expectedLast.String(), last.String())
 		}
 	}
 
-	expectedKnown := make(map[uint64]int64)
+	expectedKnown := make(map[common.Address]int64)
 	for _, p := range participants {
 		expectedKnown[p.id] = testSize - 1
 	}
@@ -528,7 +537,7 @@ func TestBadgerEvents(t *testing.T) {
 	}
 
 	for _, p := range participants {
-		evs := events[p.hex]
+		evs := events[p.id]
 		for _, ev := range evs {
 			if err := store.AddConsensusEvent(ev); err != nil {
 				t.Fatal(err)
@@ -544,7 +553,7 @@ func TestBadgerRounds(t *testing.T) {
 	defer removeBadgerStore(store, t)
 
 	round := NewRoundCreated()
-	events := make(map[string]Event)
+	events := make(map[common.Address]Event)
 	for _, p := range participants {
 		event := NewEvent([][]byte{},
 			[]InternalTransaction{},
@@ -552,7 +561,7 @@ func TestBadgerRounds(t *testing.T) {
 			make(EventHashes, 2),
 			p.pubKey,
 			0, nil)
-		events[p.hex] = event
+		events[p.id] = event
 		round.AddEvent(event.Hash(), true)
 	}
 
@@ -636,19 +645,19 @@ func TestBadgerBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		val1Sig, ok := storedBlock.Signatures[participants[0].hex]
-		if !ok {
+		val1Sig, err := storedBlock.GetSignature(participants[0].pubKey)
+		if err != nil {
 			t.Fatalf("Validator1 signature not stored in block")
 		}
-		if val1Sig != sig1.Signature {
+		if val1Sig.Signature != sig1.Signature {
 			t.Fatal("Validator1 block signatures differ")
 		}
 
-		val2Sig, ok := storedBlock.Signatures[participants[1].hex]
-		if !ok {
+		val2Sig, err := storedBlock.GetSignature(participants[1].pubKey)
+		if err != nil {
 			t.Fatalf("Validator2 signature not stored in block")
 		}
-		if val2Sig != sig2.Signature {
+		if val2Sig.Signature != sig2.Signature {
 			t.Fatal("Validator2 block signatures differ")
 		}
 	})
@@ -661,19 +670,21 @@ func TestBadgerFrames(t *testing.T) {
 
 	events := make([]*EventMessage, len(participants))
 	roots := make([]*Root, len(participants))
-	for id, p := range participants {
+	for i, p := range participants {
 		event := NewEvent(
-			[][]byte{[]byte(fmt.Sprintf("%s_%d", p.hex[:5], 0))},
+			[][]byte{
+				[]byte(fmt.Sprintf("%s_%d", string(p.id[:5]), 0)),
+			},
 			[]InternalTransaction{},
 			[]BlockSignature{{Validator: []byte("validator"), Index: 0, Signature: "r|s"}},
 			make(EventHashes, 2),
 			p.pubKey,
 			0, nil)
 		event.Sign(p.privKey)
-		events[id] = event.Message
+		events[i] = event.Message
 
-		root := NewBaseRoot(uint64(id))
-		roots[id] = &root
+		root := NewBaseRoot(p.id)
+		roots[i] = &root
 	}
 	frame := Frame{
 		Round:  1,

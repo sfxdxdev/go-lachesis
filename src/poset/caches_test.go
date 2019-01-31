@@ -13,42 +13,42 @@ func TestParticipantEventsCache(t *testing.T) {
 	size := 10
 	testSize := int64(25)
 	participants := peers.NewPeersFromSlice([]*peers.Peer{
-		peers.NewPeer("0xaa", ""),
-		peers.NewPeer("0xbb", ""),
-		peers.NewPeer("0xcc", ""),
+		peers.NewPeer(common.FromHex("0xaa"), ""),
+		peers.NewPeer(common.FromHex("0xbb"), ""),
+		peers.NewPeer(common.FromHex("0xcc"), ""),
 	})
 
 	pec := NewParticipantEventsCache(size, participants)
 
-	items := make(map[string]EventHashes)
-	for pk := range participants.ByPubKey {
-		items[pk] = EventHashes{}
+	items := make(map[common.Address]EventHashes)
+	for id := range participants.ByID {
+		items[id] = EventHashes{}
 	}
 
 	for i := int64(0); i < testSize; i++ {
-		for pk := range participants.ByPubKey {
-			item := fakeEventHash(fmt.Sprintf("%s%d", pk, i))
+		for id := range participants.ByID {
+			item := fakeEventHash(fmt.Sprintf("%s%d", id.String(), i))
 
-			pec.Set(pk, item, i)
+			pec.Set(id, item, i)
 
-			pitems := items[pk]
+			pitems := items[id]
 			pitems = append(pitems, item)
-			items[pk] = pitems
+			items[id] = pitems
 		}
 	}
 
 	// GET ITEM ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-	for pk := range participants.ByPubKey {
+	for id := range participants.ByID {
 
 		index1 := int64(9)
-		_, err := pec.GetItem(pk, index1)
+		_, err := pec.GetItem(id, index1)
 		if err == nil || !common.Is(err, common.TooLate) {
 			t.Fatalf("Expected ErrTooLate")
 		}
 
 		index2 := int64(15)
-		expected2 := items[pk][index2]
-		actual2, err := pec.GetItem(pk, index2)
+		expected2 := items[id][index2]
+		actual2, err := pec.GetItem(id, index2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +57,7 @@ func TestParticipantEventsCache(t *testing.T) {
 		}
 
 		index3 := int64(27)
-		actual3, err := pec.Get(pk, index3)
+		actual3, err := pec.Get(id, index3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -77,14 +77,14 @@ func TestParticipantEventsCache(t *testing.T) {
 	}
 
 	//GET ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-	for pk := range participants.ByPubKey {
-		if _, err := pec.Get(pk, 0); err != nil && !common.Is(err, common.TooLate) {
+	for id := range participants.ByID {
+		if _, err := pec.Get(id, 0); err != nil && !common.Is(err, common.TooLate) {
 			t.Fatalf("Skipping 0 elements should return ErrTooLate")
 		}
 
 		skipIndex := int64(9)
-		expected := items[pk][skipIndex+1:]
-		cached, err := pec.Get(pk, skipIndex)
+		expected := items[id][skipIndex+1:]
+		cached, err := pec.Get(id, skipIndex)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -93,8 +93,8 @@ func TestParticipantEventsCache(t *testing.T) {
 		}
 
 		skipIndex2 := int64(15)
-		expected2 := items[pk][skipIndex2+1:]
-		cached2, err := pec.Get(pk, skipIndex2)
+		expected2 := items[id][skipIndex2+1:]
+		cached2, err := pec.Get(id, skipIndex2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func TestParticipantEventsCache(t *testing.T) {
 		}
 
 		skipIndex3 := int64(27)
-		cached3, err := pec.Get(pk, skipIndex3)
+		cached3, err := pec.Get(id, skipIndex3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,33 +117,33 @@ func TestParticipantEventsCacheEdge(t *testing.T) {
 	size := 10
 	testSize := int64(11)
 	participants := peers.NewPeersFromSlice([]*peers.Peer{
-		peers.NewPeer("0xaa", ""),
-		peers.NewPeer("0xbb", ""),
-		peers.NewPeer("0xcc", ""),
+		peers.NewPeer(common.FromHex("0xaa"), ""),
+		peers.NewPeer(common.FromHex("0xbb"), ""),
+		peers.NewPeer(common.FromHex("0xcc"), ""),
 	})
 
 	pec := NewParticipantEventsCache(size, participants)
 
-	items := make(map[string]EventHashes)
-	for pk := range participants.ByPubKey {
-		items[pk] = EventHashes{}
+	items := make(map[common.Address]EventHashes)
+	for id := range participants.ByID {
+		items[id] = EventHashes{}
 	}
 
 	for i := int64(0); i < testSize; i++ {
-		for pk := range participants.ByPubKey {
-			item := fakeEventHash(fmt.Sprintf("%s%d", pk, i))
+		for id := range participants.ByID {
+			item := fakeEventHash(fmt.Sprintf("%s%d", id, i))
 
-			pec.Set(pk, item, i)
+			pec.Set(id, item, i)
 
-			pitems := items[pk]
+			pitems := items[id]
 			pitems = append(pitems, item)
-			items[pk] = pitems
+			items[id] = pitems
 		}
 	}
 
-	for pk := range participants.ByPubKey {
-		expected := items[pk][size:]
-		cached, err := pec.Get(pk, int64(size-1))
+	for id := range participants.ByID {
+		expected := items[id][size:]
+		cached, err := pec.Get(id, int64(size-1))
 		if err != nil {
 			t.Fatal(err)
 		}

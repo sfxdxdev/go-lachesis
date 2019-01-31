@@ -6,29 +6,27 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 )
 
 type pub struct {
-	id      uint64
+	id      common.Address
 	privKey *ecdsa.PrivateKey
 	pubKey  []byte
-	hex     string
 }
 
 func initInmemStore(cacheSize int) (*InmemStore, []pub) {
-	n := uint64(3)
+	const N = 3
 	var participantPubs []pub
 	participants := peers.NewPeers()
-	for i := uint64(0); i < n; i++ {
+	for i := 0; i < N; i++ {
 		key, _ := crypto.GenerateECDSAKey()
 		pubKey := crypto.FromECDSAPub(&key.PublicKey)
-		peer := peers.NewPeer(fmt.Sprintf("0x%X", pubKey), "")
-		participantPubs = append(participantPubs,
-			pub{i, key, pubKey, peer.PubKeyHex})
+		peer := peers.NewPeer(pubKey, "")
+		participantPubs = append(participantPubs, pub{peer.ID, key, pubKey})
 		participants.AddPeer(peer)
-		participantPubs[len(participantPubs)-1].id = peer.ID
 	}
 
 	store := NewInmemStore(participants, cacheSize, nil)
@@ -40,26 +38,31 @@ func TestInmemEvents(t *testing.T) {
 	testSize := int64(15)
 	store, participants := initInmemStore(cacheSize)
 
-	events := make(map[string][]Event)
+	events := make(map[common.Address][]Event)
 
 	t.Run("Store Events", func(t *testing.T) {
 		for _, p := range participants {
 			var items []Event
 			for k := int64(0); k < testSize; k++ {
-				event := NewEvent([][]byte{[]byte(fmt.Sprintf("%s_%d", p.hex[:5], k))},
+				event := NewEvent(
+					[][]byte{
+						[]byte(fmt.Sprintf("%s_%d", string(p.id[:5]), k)),
+					},
 					nil,
-					[]BlockSignature{{Validator: []byte("validator"), Index: 0, Signature: "r|s"}},
+					[]BlockSignature{
+						{Validator: []byte("validator"), Index: 0, Signature: "r|s"},
+					},
 					make(EventHashes, 2),
 					p.pubKey,
 					k, nil)
-				_ = event.Hash() // just to set private variables
+
 				items = append(items, event)
 				err := store.SetEvent(event)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
-			events[p.hex] = items
+			events[p.id] = items
 		}
 
 		for p, evs := range events {
@@ -78,26 +81,26 @@ func TestInmemEvents(t *testing.T) {
 	t.Run("Check ParticipantEventsCache", func(t *testing.T) {
 		skipIndex := int64(-1) // do not skip any indexes
 		for _, p := range participants {
-			pEvents, err := store.ParticipantEvents(p.hex, skipIndex)
+			pEvents, err := store.ParticipantEvents(p.id, skipIndex)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if l := int64(len(pEvents)); l != testSize {
-				t.Fatalf("%s should have %d Events, not %d", p.hex, testSize, l)
+				t.Fatalf("%s should have %d Events, not %d", p.id.String(), testSize, l)
 			}
 
-			expectedEvents := events[p.hex][skipIndex+1:]
+			expectedEvents := events[p.id][skipIndex+1:]
 			for k, e := range expectedEvents {
 				if e.Hash() != pEvents[k] {
 					t.Fatalf("ParticipantEvents[%s][%d] should be %s, not %s",
-						p.hex, k, e.Hash(), pEvents[k])
+						p.id.String(), k, e.Hash(), pEvents[k])
 				}
 			}
 		}
 	})
 
 	t.Run("Check KnownEvents", func(t *testing.T) {
-		expectedKnown := make(map[uint64]int64)
+		expectedKnown := make(map[common.Address]int64)
 		for _, p := range participants {
 			expectedKnown[p.id] = testSize - 1
 		}
@@ -109,7 +112,7 @@ func TestInmemEvents(t *testing.T) {
 
 	t.Run("Add ConsensusEvents", func(t *testing.T) {
 		for _, p := range participants {
-			evs := events[p.hex]
+			evs := events[p.id]
 			for _, ev := range evs {
 				if err := store.AddConsensusEvent(ev); err != nil {
 					t.Fatal(err)
@@ -124,7 +127,7 @@ func TestInmemRounds(t *testing.T) {
 	store, participants := initInmemStore(10)
 
 	round := NewRoundCreated()
-	events := make(map[string]Event)
+	events := make(map[common.Address]Event)
 	for _, p := range participants {
 		event := NewEvent([][]byte{},
 			nil,
@@ -132,7 +135,7 @@ func TestInmemRounds(t *testing.T) {
 			make(EventHashes, 2),
 			p.pubKey,
 			0, nil)
-		events[p.hex] = event
+		events[p.id] = event
 		round.AddEvent(event.Hash(), true)
 	}
 
@@ -219,19 +222,19 @@ func TestInmemBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		val1Sig, ok := storedBlock.Signatures[participants[0].hex]
-		if !ok {
+		val1Sig, err := storedBlock.GetSignature(participants[0].pubKey)
+		if err != nil {
 			t.Fatalf("Validator1 signature not stored in block")
 		}
-		if val1Sig != sig1.Signature {
+		if val1Sig.Signature != sig1.Signature {
 			t.Fatal("Validator1 block signatures differ")
 		}
 
-		val2Sig, ok := storedBlock.Signatures[participants[1].hex]
-		if !ok {
+		val2Sig, err := storedBlock.GetSignature(participants[1].pubKey)
+		if err != nil {
 			t.Fatalf("Validator2 signature not stored in block")
 		}
-		if val2Sig != sig2.Signature {
+		if val2Sig.Signature != sig2.Signature {
 			t.Fatal("Validator2 block signatures differ")
 		}
 	})

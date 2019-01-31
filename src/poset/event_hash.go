@@ -45,8 +45,8 @@ func (hash *EventHash) Equal(raw []byte) bool {
 }
 
 // Bytes returns value as bytes.
-func (hash *EventHash) Bytes() []byte {
-	return (*common.Hash)(hash).Bytes()
+func (hash EventHash) Bytes() []byte {
+	return hash[:]
 }
 
 // String returns value as hex string.

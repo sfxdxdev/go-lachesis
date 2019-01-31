@@ -108,21 +108,19 @@ var (
 )
 
 type TestNode struct {
-	ID     uint64
+	ID     common.Address
 	Pub    []byte
-	PubHex string
 	Key    *ecdsa.PrivateKey
 	Events []Event
 }
 
 func NewTestNode(key *ecdsa.PrivateKey) TestNode {
 	pub := crypto.FromECDSAPub(&key.PublicKey)
-	ID := common.Hash64(pub)
+	ID := crypto.AddressOfPK(pub)
 	node := TestNode{
 		ID:     ID,
 		Key:    key,
 		Pub:    pub,
-		PubHex: fmt.Sprintf("0x%X", pub),
 		Events: []Event{},
 	}
 	return node
@@ -164,28 +162,27 @@ func testLogger(t testing.TB) *logrus.Entry {
 
 /* Initialisation functions */
 
-func initPosetNodes(n int) ([]TestNode, map[string]EventHash, *[]Event, *peers.Peers) {
+func initPosetNodes(n int) ([]TestNode, *[]Event, *peers.Peers) {
 	var (
 		participants  = peers.NewPeers()
 		orderedEvents = &[]Event{}
 		nodes         = make([]TestNode, 0)
-		index         = make(map[string]EventHash)
-		keys          = make(map[string]*ecdsa.PrivateKey)
+		keys          = make(map[common.Address]*ecdsa.PrivateKey)
 	)
 
 	for i := 0; i < n; i++ {
 		key, _ := crypto.GenerateECDSAKey()
 		pub := crypto.FromECDSAPub(&key.PublicKey)
-		pubHex := fmt.Sprintf("0x%X", pub)
-		participants.AddPeer(peers.NewPeer(pubHex, ""))
-		keys[pubHex] = key
+		peer := peers.NewPeer(pub, "")
+		participants.AddPeer(peer)
+		keys[peer.ID] = key
 	}
 
 	for _, peer := range participants.ToPeerSlice() {
-		nodes = append(nodes, NewTestNode(keys[peer.PubKeyHex]))
+		nodes = append(nodes, NewTestNode(keys[peer.ID]))
 	}
 
-	return nodes, index, orderedEvents, participants
+	return nodes, orderedEvents, participants
 }
 
 func playEvents(plays []play, nodes []TestNode,
@@ -196,10 +193,14 @@ func playEvents(plays []play, nodes []TestNode,
 			ft[index[p.knownRoots[k]]] = 1
 		}
 
-		e := NewEvent(p.txPayload, nil,
+		e := NewEvent(
+			p.txPayload,
+			nil,
 			p.sigPayload,
 			EventHashes{index[p.selfParent], index[p.otherParent]},
-			nodes[p.to].Pub, p.index, ft)
+			nodes[p.to].Pub,
+			p.index,
+			ft)
 
 		nodes[p.to].signAndAddEvent(e, p.name, index, orderedEvents)
 	}
@@ -232,10 +233,9 @@ func createPoset(t testing.TB,
 	return poset
 }
 
-func initPosetFull(t testing.TB, plays []play, db bool, n int,
-	logger *logrus.Entry) (*Poset, map[string]EventHash, *[]Event, []TestNode) {
-	nodes, index, orderedEvents, participants := initPosetNodes(n)
-
+func initPosetFull(t testing.TB, plays []play, db bool, n int, logger *logrus.Entry) (*Poset, map[string]EventHash, *[]Event, []TestNode) {
+	nodes, orderedEvents, participants := initPosetNodes(n)
+	index := make(map[string]EventHash)
 	// Needed to have sorted nodes based on participants hash32
 	for i, peer := range participants.ToPeerSlice() {
 		selfParent := GenRootSelfParent(peer.ID)
@@ -258,7 +258,7 @@ func initPosetFull(t testing.TB, plays []play, db bool, n int,
 
 	// Add reference to each participants' root event
 	for i, peer := range participants.ToPeerSlice() {
-		root, err := poset.Store.GetRoot(peer.PubKeyHex)
+		root, err := poset.Store.GetRoot(peer.ID)
 		if err != nil {
 			panic(err)
 		}
@@ -483,7 +483,7 @@ func TestFork(t *testing.T) {
 		key, _ := crypto.GenerateECDSAKey()
 		node := NewTestNode(key)
 		nodes = append(nodes, node)
-		participants.AddPeer(peers.NewPeer(node.PubHex, ""))
+		participants.AddPeer(peers.NewPeer(node.Pub, ""))
 	}
 
 	store := NewInmemStore(participants, cacheSize, pos.DefaultConfig())
@@ -551,8 +551,7 @@ func initRoundPoset(t *testing.T) (*Poset, map[string]EventHash, []TestNode) {
 		{0, 2, s00, e21, e02, nil, nil, []string{e0, e21}},
 		{1, 2, e10, "", s10, nil, nil, []string{e0, e1}},
 		{1, 3, s10, e02, f1, nil, nil, []string{e21, e02, e1}},
-		{1, 4, f1, "", s11, [][]byte{[]byte("abc")}, nil,
-			[]string{e21, e02, f1}},
+		{1, 4, f1, "", s11, [][]byte{[]byte("abc")}, nil, []string{e21, e02, f1}},
 	}
 
 	p, index, _, nodes := initPosetFull(t, plays, false, n, testLogger(t))
@@ -578,10 +577,10 @@ func TestInsertEvent(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if !(e0Event.Message.SelfParentIndex == -1 &&
-			e0Event.Message.OtherParentCreatorID == peers.PeerNIL &&
-			e0Event.Message.OtherParentIndex == -1 &&
-			e0Event.Message.CreatorID == p.Participants.ByPubKey[e0Event.GetCreator()].ID) {
+		if e0Event.Message.SelfParentIndex != -1 ||
+			e0Event.OtherParentAddress() != peers.PeerNIL ||
+			e0Event.Message.OtherParentIndex != -1 ||
+			e0Event.CreatorAddress() != e0Event.CreatorAddress() {
 			t.Fatalf("Invalid wire info on %s", e0)
 		}
 
@@ -595,10 +594,9 @@ func TestInsertEvent(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if !(e21Event.Message.SelfParentIndex == 1 &&
-			e21Event.Message.OtherParentCreatorID == p.Participants.ByPubKey[e10Event.GetCreator()].ID &&
-			e21Event.Message.OtherParentIndex == 1 &&
-			e21Event.Message.CreatorID == p.Participants.ByPubKey[e21Event.GetCreator()].ID) {
+		if e21Event.Message.SelfParentIndex != 1 ||
+			e21Event.OtherParentAddress() != e10Event.CreatorAddress() ||
+			e21Event.Message.OtherParentIndex != 1 {
 			t.Fatalf("Invalid wire info on %s", e21)
 		}
 
@@ -607,14 +605,11 @@ func TestInsertEvent(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if !(f1Event.Message.SelfParentIndex == 2 &&
-			f1Event.Message.OtherParentCreatorID == p.Participants.ByPubKey[e0Event.GetCreator()].ID &&
-			f1Event.Message.OtherParentIndex == 2 &&
-			f1Event.Message.CreatorID == p.Participants.ByPubKey[f1Event.GetCreator()].ID) {
+		if f1Event.Message.SelfParentIndex != 2 ||
+			f1Event.OtherParentAddress() != e0Event.CreatorAddress() ||
+			f1Event.Message.OtherParentIndex != 2 {
 			t.Fatalf("Invalid wire info on %s", f1)
 		}
-
-		e0CreatorID := fmt.Sprint(p.Participants.ByPubKey[e0Event.GetCreator()].ID)
 
 		type Hierarchy struct {
 			ev            string
@@ -623,7 +618,7 @@ func TestInsertEvent(t *testing.T) {
 		}
 
 		toCheck := []Hierarchy{
-			{e0, fakeEventHash("Root" + e0CreatorID), fakeEventHash("")},
+			{e0, GenRootSelfParent(e0Event.CreatorAddress()), EventHash{}},
 			{e10, index[e1], index[e0]},
 			{e21, index[s20], index[e10]},
 			{e02, index[s00], index[e21]},
@@ -1038,14 +1033,14 @@ func TestCreateRoot(t *testing.T) {
 			NextRound: 1,
 			SelfParent: &RootEvent{
 				Hash:             hashBytes(index[s00]),
-				CreatorID:        participants[0].ID,
+				CreatorID:        participants[0].ID.Bytes(),
 				Index:            1,
 				LamportTimestamp: 1,
 				Round:            0},
 			Others: map[string]*RootEvent{
 				hashString(index[e02]): {
 					Hash:             hashBytes(index[e21]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 2,
 					Round:            1},
@@ -1055,7 +1050,7 @@ func TestCreateRoot(t *testing.T) {
 			NextRound: 0,
 			SelfParent: &RootEvent{
 				Hash:             hashBytes(index[e10]),
-				CreatorID:        participants[1].ID,
+				CreatorID:        participants[1].ID.Bytes(),
 				Index:            1,
 				LamportTimestamp: 1,
 				Round:            0},
@@ -1065,14 +1060,14 @@ func TestCreateRoot(t *testing.T) {
 			NextRound: 1,
 			SelfParent: &RootEvent{
 				Hash:             hashBytes(index[s10]),
-				CreatorID:        participants[1].ID,
+				CreatorID:        participants[1].ID.Bytes(),
 				Index:            2,
 				LamportTimestamp: 2,
 				Round:            0},
 			Others: map[string]*RootEvent{
 				hashString(index[f1]): {
 					Hash:             hashBytes(index[e02]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 3,
 					Round:            1},
@@ -1117,8 +1112,8 @@ e01  e12
 
 */
 func initDentedPoset(t *testing.T) (*Poset, map[string]EventHash) {
-	nodes, index, orderedEvents, participants := initPosetNodes(n)
-
+	nodes, orderedEvents, participants := initPosetNodes(n)
+	index := make(map[string]EventHash)
 	orderedPeers := participants.ToPeerSlice()
 
 	for i, peer := range orderedPeers {
@@ -1154,7 +1149,7 @@ func TestCreateRootBis(t *testing.T) {
 			Others: map[string]*RootEvent{
 				hashString(index[e12]): {
 					Hash:             hashBytes(index[e2]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
@@ -1183,8 +1178,8 @@ e0  e1  e2    Block (0, 1)
 0   1    2
 */
 func initBlockPoset(t *testing.T) (*Poset, []TestNode, map[string]EventHash) {
-	nodes, index, orderedEvents, participants := initPosetNodes(n)
-
+	nodes, orderedEvents, participants := initPosetNodes(n)
+	index := make(map[string]EventHash)
 	for i, peer := range participants.ToPeerSlice() {
 		event := NewEvent(nil, nil, nil,
 			EventHashes{GenRootSelfParent(peer.ID), EventHash{}},
@@ -1840,7 +1835,7 @@ func TestKnown(t *testing.T) {
 
 	participants := p.Participants.ToPeerSlice()
 
-	expectedKnown := map[uint64]int64{
+	expectedKnown := map[common.Address]int64{
 		participants[0].ID: 10,
 		participants[1].ID: 9,
 		participants[2].ID: 9,
@@ -1848,9 +1843,9 @@ func TestKnown(t *testing.T) {
 
 	known := p.Store.KnownEvents()
 	for i := range p.Participants.ToIDSlice() {
-		if l := known[uint64(i)]; l != expectedKnown[uint64(i)] {
+		if l := known[participants[i].ID]; l != expectedKnown[participants[i].ID] {
 			t.Fatalf("known event %d should be %d, not %d", i,
-				expectedKnown[uint64(i)], l)
+				expectedKnown[participants[i].ID], l)
 		}
 	}
 }
@@ -1916,7 +1911,7 @@ func TestGetFrame(t *testing.T) {
 			NextRound: 1,
 			SelfParent: &RootEvent{
 				Hash:             hashBytes(index[e0]),
-				CreatorID:        participants[0].ID,
+				CreatorID:        participants[0].ID.Bytes(),
 				Index:            0,
 				LamportTimestamp: 0,
 				Round:            0,
@@ -1924,7 +1919,7 @@ func TestGetFrame(t *testing.T) {
 			Others: map[string]*RootEvent{
 				hashString(index[f0]): {
 					Hash:             hashBytes(index[f2b]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 3,
 					Round:            1,
@@ -1935,7 +1930,7 @@ func TestGetFrame(t *testing.T) {
 			NextRound: 1,
 			SelfParent: &RootEvent{
 				Hash:             hashBytes(index[e10]),
-				CreatorID:        participants[1].ID,
+				CreatorID:        participants[1].ID.Bytes(),
 				Index:            1,
 				LamportTimestamp: 1,
 				Round:            0,
@@ -1943,7 +1938,7 @@ func TestGetFrame(t *testing.T) {
 			Others: map[string]*RootEvent{
 				hashString(index[f1]): {
 					Hash:             hashBytes(index[f0]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 4,
 					Round:            1,
@@ -1954,7 +1949,7 @@ func TestGetFrame(t *testing.T) {
 			NextRound: 1,
 			SelfParent: &RootEvent{
 				Hash:             hashBytes(index[e2]),
-				CreatorID:        participants[2].ID,
+				CreatorID:        participants[2].ID.Bytes(),
 				Index:            0,
 				LamportTimestamp: 0,
 				Round:            0,
@@ -1962,7 +1957,7 @@ func TestGetFrame(t *testing.T) {
 			Others: map[string]*RootEvent{
 				hashString(index[f2]): {
 					Hash:             hashBytes(index[e10]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 1,
 					Round:            0,
@@ -2079,7 +2074,7 @@ func TestResetFromFrame(t *testing.T) {
 	*/
 
 	// Test Known
-	expectedKnown := map[uint64]int64{
+	expectedKnown := map[common.Address]int64{
 		participants[0].ID: 2,
 		participants[1].ID: 4,
 		participants[2].ID: 3,
@@ -2343,8 +2338,8 @@ func TestBootstrap(t *testing.T) {
 */
 
 func initFunkyPoset(t *testing.T, logger *logrus.Logger, full bool) (*Poset, map[string]EventHash) {
-	nodes, index, orderedEvents, participants := initPosetNodes(4)
-
+	nodes, orderedEvents, participants := initPosetNodes(4)
+	index := make(map[string]EventHash)
 	for i, peer := range participants.ToPeerSlice() {
 		name := fmt.Sprintf("w0%d", i)
 		selfParent := GenRootSelfParent(peer.ID)
@@ -2603,14 +2598,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w01]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[a12]): {
 						Hash:             hashBytes(index[a23]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 1,
 						Round:            0},
@@ -2620,14 +2615,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[a23]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 1,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[a21]): {
 						Hash:             hashBytes(index[a12]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 2,
 						Round:            1},
@@ -2637,14 +2632,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w03]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[w13]): {
 						Hash:             hashBytes(index[a21]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 3,
 						Round:            1},
@@ -2657,14 +2652,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[a12]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 2,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[a10]): {
 						Hash:             hashBytes(index[a00]),
-						CreatorID:        participants[0].ID,
+						CreatorID:        participants[0].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 1,
 						Round:            0},
@@ -2674,14 +2669,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[a21]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 3,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[w12]): {
 						Hash:             hashBytes(index[w13]),
-						CreatorID:        participants[3].ID,
+						CreatorID:        participants[3].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 4,
 						Round:            1},
@@ -2691,14 +2686,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w03]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[w13]): {
 						Hash:             hashBytes(index[a21]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 3,
 						Round:            1},
@@ -2710,14 +2705,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[a00]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 1,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[w10]): {
 						Hash:             hashBytes(index[w11]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            3,
 						LamportTimestamp: 6,
 						Round:            2},
@@ -2727,14 +2722,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 3,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w11]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            3,
 					LamportTimestamp: 6,
 					Round:            2},
 				Others: map[string]*RootEvent{
 					hashString(index[w21]): {
 						Hash:             hashBytes(index[w23]),
-						CreatorID:        participants[3].ID,
+						CreatorID:        participants[3].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 8,
 						Round:            2},
@@ -2744,14 +2739,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w12]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            3,
 					LamportTimestamp: 5,
 					Round:            2},
 				Others: map[string]*RootEvent{
 					hashString(index[b21]): {
 						Hash:             hashBytes(index[w11]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            3,
 						LamportTimestamp: 6,
 						Round:            2},
@@ -2761,14 +2756,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w13]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 4,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[w23]): {
 						Hash:             hashBytes(index[b21]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            4,
 						LamportTimestamp: 7,
 						Round:            2},
@@ -2780,13 +2775,13 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 4,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[b00]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            3,
 					LamportTimestamp: 8, Round: 3},
 				Others: map[string]*RootEvent{
 					hashString(index[w20]): {
 						Hash:             hashBytes(index[w22]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            5,
 						LamportTimestamp: 11,
 						Round:            3},
@@ -2796,14 +2791,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 4,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[c10]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            5,
 					LamportTimestamp: 10,
 					Round:            3},
 				Others: map[string]*RootEvent{
 					hashString(index[w31]): {
 						Hash:             hashBytes(index[w20]),
-						CreatorID:        participants[0].ID,
+						CreatorID:        participants[0].ID.Bytes(),
 						Index:            4,
 						LamportTimestamp: 12,
 						Round:            4},
@@ -2813,14 +2808,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 4,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w22]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            5,
 					LamportTimestamp: 11,
 					Round:            3},
 				Others: map[string]*RootEvent{
 					hashString(index[w32]): {
 						Hash:             hashBytes(index[w31]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            6,
 						LamportTimestamp: 13,
 						Round:            4},
@@ -2830,14 +2825,14 @@ func TestFunkyPosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w13]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 4,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[w23]): {
 						Hash:             hashBytes(index[b21]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            4,
 						LamportTimestamp: 7,
 						Round:            2},
@@ -2989,8 +2984,8 @@ func TestFunkyPosetReset(t *testing.T) {
 
 func initSparsePoset(
 	t *testing.T, logger *logrus.Logger) (*Poset, map[string]EventHash) {
-	nodes, index, orderedEvents, participants := initPosetNodes(4)
-
+	nodes, orderedEvents, participants := initPosetNodes(4)
+	index := make(map[string]EventHash)
 	for i, peer := range participants.ToPeerSlice() {
 		name := fmt.Sprintf("w0%d", i)
 		selfParent := GenRootSelfParent(peer.ID)
@@ -3085,16 +3080,12 @@ func TestSparsePosetFrames(t *testing.T) {
 		frame, err := p.GetFrame(block.RoundReceived())
 		for k, ev := range frame.Events {
 			ev.Body.Hash()
-			hash, err := ev.Body.Hash()
-			if err != nil {
-				t.Fatal(err)
-			}
+			hash := ev.Body.Hash()
 			r, err := p.round(hash)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Logf("frame %d event %d: %s, round %d",
-				frame.Round, k, getName(index, hash), r)
+			t.Logf("frame %d event %d: %s, round %d", frame.Round, k, getName(index, hash), r)
 		}
 		for k, r := range frame.Roots {
 			var hash EventHash
@@ -3124,14 +3115,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w00]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[w10]): {
 						Hash:             hashBytes(index[e32]),
-						CreatorID:        participants[3].ID,
+						CreatorID:        participants[3].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 3,
 						Round:            1},
@@ -3141,14 +3132,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 0,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w01]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[e10]): {
 						Hash:             hashBytes(index[w00]),
-						CreatorID:        participants[0].ID,
+						CreatorID:        participants[0].ID.Bytes(),
 						Index:            0,
 						LamportTimestamp: 0,
 						Round:            0},
@@ -3158,14 +3149,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w02]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[e21]): {
 						Hash:             hashBytes(index[e10]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 1,
 						Round:            0},
@@ -3178,14 +3169,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w10]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 4,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[f01]): {
 						Hash:             hashBytes(index[w11]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 5,
 						Round:            2},
@@ -3195,14 +3186,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[e10]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 1,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[w11]): {
 						Hash:             hashBytes(index[w10]),
-						CreatorID:        participants[0].ID,
+						CreatorID:        participants[0].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 4,
 						Round:            1},
@@ -3212,14 +3203,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[e21]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 2,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[w12]): {
 						Hash:             hashBytes(index[f01]),
-						CreatorID:        participants[0].ID,
+						CreatorID:        participants[0].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 6,
 						Round:            2},
@@ -3229,14 +3220,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 1,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w03]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            0,
 					LamportTimestamp: 0,
 					Round:            0},
 				Others: map[string]*RootEvent{
 					hashString(index[e32]): {
 						Hash:             hashBytes(index[e21]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            1,
 						LamportTimestamp: 2,
 						Round:            1},
@@ -3248,14 +3239,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w10]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 4,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[f01]): {
 						Hash:             hashBytes(index[w11]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 5,
 						Round:            2},
@@ -3265,14 +3256,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 3,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w11]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 5,
 					Round:            2},
 				Others: map[string]*RootEvent{
 					hashString(index[w21]): {
 						Hash:             hashBytes(index[w13]),
-						CreatorID:        participants[3].ID,
+						CreatorID:        participants[3].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 8,
 						Round:            3},
@@ -3282,14 +3273,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 3,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w12]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 7,
 					Round:            2},
 				Others: map[string]*RootEvent{
 					hashString(index[w22]): {
 						Hash:             hashBytes(index[w21]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            3,
 						LamportTimestamp: 9,
 						Round:            3},
@@ -3299,14 +3290,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 3,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[e32]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 3,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[w13]): {
 						Hash:             hashBytes(index[w12]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 7,
 						Round:            2},
@@ -3318,14 +3309,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 2,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w10]),
-					CreatorID:        participants[0].ID,
+					CreatorID:        participants[0].ID.Bytes(),
 					Index:            1,
 					LamportTimestamp: 4,
 					Round:            1},
 				Others: map[string]*RootEvent{
 					hashString(index[f01]): {
 						Hash:             hashBytes(index[w11]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            2,
 						LamportTimestamp: 5,
 						Round:            2},
@@ -3335,14 +3326,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 4,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w21]),
-					CreatorID:        participants[1].ID,
+					CreatorID:        participants[1].ID.Bytes(),
 					Index:            3,
 					LamportTimestamp: 9,
 					Round:            3},
 				Others: map[string]*RootEvent{
 					hashString(index[g13]): {
 						Hash:             hashBytes(index[w23]),
-						CreatorID:        participants[3].ID,
+						CreatorID:        participants[3].ID.Bytes(),
 						Index:            3,
 						LamportTimestamp: 11,
 						Round:            4},
@@ -3352,14 +3343,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 4,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w22]),
-					CreatorID:        participants[2].ID,
+					CreatorID:        participants[2].ID.Bytes(),
 					Index:            3,
 					LamportTimestamp: 10,
 					Round:            3},
 				Others: map[string]*RootEvent{
 					hashString(index[w32]): {
 						Hash:             hashBytes(index[g13]),
-						CreatorID:        participants[1].ID,
+						CreatorID:        participants[1].ID.Bytes(),
 						Index:            4,
 						LamportTimestamp: 12,
 						Round:            4},
@@ -3369,14 +3360,14 @@ func TestSparsePosetFrames(t *testing.T) {
 				NextRound: 4,
 				SelfParent: &RootEvent{
 					Hash:             hashBytes(index[w13]),
-					CreatorID:        participants[3].ID,
+					CreatorID:        participants[3].ID.Bytes(),
 					Index:            2,
 					LamportTimestamp: 8,
 					Round:            3},
 				Others: map[string]*RootEvent{
 					hashString(index[w23]): {
 						Hash:             hashBytes(index[w22]),
-						CreatorID:        participants[2].ID,
+						CreatorID:        participants[2].ID.Bytes(),
 						Index:            3,
 						LamportTimestamp: 10,
 						Round:            3},
@@ -3506,12 +3497,11 @@ func compareRoundClothos(p, p2 *Poset, index map[string]EventHash, round int64, 
 
 }
 
-func getDiff(p *Poset, known map[uint64]int64, t *testing.T) []Event {
+func getDiff(p *Poset, known map[common.Address]int64, t *testing.T) []Event {
 	var diff []Event
 	for id, ct := range known {
-		pk := p.Participants.ByID[id].PubKeyHex
 		// get participant Events with index > ct
-		participantEvents, err := p.Store.ParticipantEvents(pk, ct)
+		participantEvents, err := p.Store.ParticipantEvents(id, ct)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3541,7 +3531,7 @@ func compareRootEvents(t *testing.T, x, exp *RootEvent, index map[string]EventHa
 	xHash.Set(x.Hash)
 	expHash.Set(exp.Hash)
 	if xHash != expHash || x.Index != exp.Index ||
-		x.CreatorID != exp.CreatorID || x.Round != exp.Round ||
+		!bytes.Equal(x.CreatorID, exp.CreatorID) || x.Round != exp.Round ||
 		x.LamportTimestamp != exp.LamportTimestamp {
 		t.Fatalf("expected root event %s: %v, got %s: %v",
 			getName(index, expHash), exp, getName(index, xHash), x)
@@ -3583,15 +3573,14 @@ func compareEventMessages(t *testing.T, x, exp *EventMessage, index map[string]E
 	if !reflect.DeepEqual(x.ClothoProof, exp.ClothoProof) ||
 		!bytes.Equal(x.FlagTable, exp.FlagTable) ||
 		x.Signature != exp.Signature {
-		hash, _ := exp.Body.Hash()
 		t.Fatalf("expcted message to event %s: %v, got: %v",
-			getName(index, hash), exp, x)
+			getName(index, exp.Body.Hash()), exp, x)
 	}
 	compareEventBody(t, x.Body, exp.Body)
 }
 
 func compareEventBody(t *testing.T, x, exp *EventBody) {
-	if x.Index != exp.Index || !bytes.Equal(x.Creator, exp.Creator) ||
+	if x.Index != exp.Index || !bytes.Equal(x.CreatorPK, exp.CreatorPK) ||
 		!reflect.DeepEqual(x.BlockSignatures, exp.BlockSignatures) ||
 		!reflect.DeepEqual(x.InternalTransactions, exp.InternalTransactions) ||
 		!reflect.DeepEqual(x.Parents, exp.Parents) ||

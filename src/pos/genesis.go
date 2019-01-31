@@ -17,7 +17,7 @@ func FakeGenesis(participants *peers.Peers, conf *Config, db state.Database) (co
 	statedb, _ := state.New(common.Hash{}, db)
 
 	for _, p := range participants.ToPeerSlice() {
-		statedb.AddBalance(p.Address(), balance)
+		statedb.AddBalance(p.ID, balance)
 	}
 	return statedb.Commit(true)
 }

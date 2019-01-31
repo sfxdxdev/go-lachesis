@@ -14,7 +14,7 @@ message WireBlockSignature {
 
 message Block {
   BlockBody Body = 1;
-  map<string, string> Signatures = 2;
+  map<string, string> signatures = 2;
   bytes hash = 3;
   string hex = 4;
   bytes StateHash = 5;

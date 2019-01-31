@@ -3,13 +3,14 @@ package poset
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"encoding/hex"
 	"fmt"
 	"reflect"
 	"time"
 
-	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/golang/protobuf/proto"
+
+	"github.com/Fantom-foundation/go-lachesis/src/common"
+	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 )
 
 // StateHash is the hash of the current state of transactions, if you have one
@@ -45,7 +46,7 @@ func (bb *BlockBody) Hash() ([]byte, error) {
 
 // ValidatorHex returns the Hex ID of a validator for this block
 func (bs *BlockSignature) ValidatorHex() string {
-	return fmt.Sprintf("0x%X", bs.Validator)
+	return common.ToHex(bs.Validator)
 }
 
 // ProtoMarshal marshal the block signatures to protobuff
@@ -143,9 +144,8 @@ func (b *Block) GetBlockSignatures() []BlockSignature {
 	res := make([]BlockSignature, len(b.Signatures))
 	i := 0
 	for val, sig := range b.Signatures {
-		validatorBytes, _ := hex.DecodeString(val[2:])
 		res[i] = BlockSignature{
-			Validator: validatorBytes,
+			Validator: common.FromHex(val),
 			Index:     b.Index(),
 			Signature: sig,
 		}
@@ -155,15 +155,15 @@ func (b *Block) GetBlockSignatures() []BlockSignature {
 }
 
 // GetSignature returns all validator signatures for the block
-func (b *Block) GetSignature(validator string) (res BlockSignature, err error) {
-	sig, ok := b.Signatures[validator]
+func (b *Block) GetSignature(validator []byte) (res BlockSignature, err error) {
+	index := common.ToHex(validator)
+	sig, ok := b.Signatures[index]
 	if !ok {
 		return res, fmt.Errorf("signature not found")
 	}
 
-	validatorBytes, _ := hex.DecodeString(validator[2:])
 	return BlockSignature{
-		Validator: validatorBytes,
+		Validator: validator,
 		Index:     b.Index(),
 		Signature: sig,
 	}, nil

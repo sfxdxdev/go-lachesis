@@ -1,7 +1,6 @@
 package poset
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
@@ -54,7 +53,7 @@ func TestAppendSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blockSignature, err := block.GetSignature(fmt.Sprintf("0x%X", pubKeyBytes))
+	blockSignature, err := block.GetSignature(pubKeyBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

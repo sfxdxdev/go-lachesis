@@ -55,24 +55,9 @@ func (pec *ParticipantEventsCache) AddPeer(peer *peers.Peer) error {
 	return pec.rim.AddKey(peer.ID)
 }
 
-func (pec *ParticipantEventsCache) participantID(participant string) (uint64, error) {
-	peer, ok := pec.participants.ByPubKey[participant]
-
-	if !ok {
-		return peers.PeerNIL, common.NewStoreErr("ParticipantEvents", common.UnknownParticipant, participant)
-	}
-
-	return peer.ID, nil
-}
-
 // Get return participant events with index > skip
-func (pec *ParticipantEventsCache) Get(participant string, skipIndex int64) (EventHashes, error) {
-	id, err := pec.participantID(participant)
-	if err != nil {
-		return EventHashes{}, err
-	}
-
-	pe, err := pec.rim.Get(id, skipIndex)
+func (pec *ParticipantEventsCache) Get(participant common.Address, skipIndex int64) (EventHashes, error) {
+	pe, err := pec.rim.Get(participant, skipIndex)
 	if err != nil {
 		return EventHashes{}, err
 	}
@@ -85,13 +70,8 @@ func (pec *ParticipantEventsCache) Get(participant string, skipIndex int64) (Eve
 }
 
 // GetItem get event for participant at index
-func (pec *ParticipantEventsCache) GetItem(participant string, index int64) (hash EventHash, err error) {
-	id, err := pec.participantID(participant)
-	if err != nil {
-		return
-	}
-
-	item, err := pec.rim.GetItem(id, index)
+func (pec *ParticipantEventsCache) GetItem(participant common.Address, index int64) (hash EventHash, err error) {
+	item, err := pec.rim.GetItem(participant, index)
 	if err != nil {
 		return
 	}
@@ -101,13 +81,8 @@ func (pec *ParticipantEventsCache) GetItem(participant string, index int64) (has
 }
 
 // GetLast get last event for participant
-func (pec *ParticipantEventsCache) GetLast(participant string) (hash EventHash, err error) {
-	id, err := pec.participantID(participant)
-	if err != nil {
-		return
-	}
-
-	last, err := pec.rim.GetLast(id)
+func (pec *ParticipantEventsCache) GetLast(participant common.Address) (hash EventHash, err error) {
+	last, err := pec.rim.GetLast(participant)
 	if err != nil {
 		return
 	}
@@ -117,16 +92,12 @@ func (pec *ParticipantEventsCache) GetLast(participant string) (hash EventHash, 
 }
 
 // Set the event for the participant
-func (pec *ParticipantEventsCache) Set(participant string, hash EventHash, index int64) error {
-	id, err := pec.participantID(participant)
-	if err != nil {
-		return err
-	}
-	return pec.rim.Set(id, hash.Bytes(), index)
+func (pec *ParticipantEventsCache) Set(participant common.Address, hash EventHash, index int64) error {
+	return pec.rim.Set(participant, hash.Bytes(), index)
 }
 
 // Known returns [participant id] => lastKnownIndex
-func (pec *ParticipantEventsCache) Known() map[uint64]int64 {
+func (pec *ParticipantEventsCache) Known() map[common.Address]int64 {
 	return pec.rim.Known()
 }
 
@@ -156,24 +127,9 @@ func NewParticipantBlockSignaturesCache(size int, participants *peers.Peers) *Pa
 	}
 }
 
-func (psc *ParticipantBlockSignaturesCache) participantID(participant string) (uint64, error) {
-	peer, ok := psc.participants.ByPubKey[participant]
-
-	if !ok {
-		return peers.PeerNIL, common.NewStoreErr("ParticipantBlockSignatures", common.UnknownParticipant, participant)
-	}
-
-	return peer.ID, nil
-}
-
 // Get return participant BlockSignatures where index > skip
-func (psc *ParticipantBlockSignaturesCache) Get(participant string, skipIndex int64) ([]BlockSignature, error) {
-	id, err := psc.participantID(participant)
-	if err != nil {
-		return []BlockSignature{}, err
-	}
-
-	ps, err := psc.rim.Get(id, skipIndex)
+func (psc *ParticipantBlockSignaturesCache) Get(participant common.Address, skipIndex int64) ([]BlockSignature, error) {
+	ps, err := psc.rim.Get(participant, skipIndex)
 	if err != nil {
 		return []BlockSignature{}, err
 	}
@@ -186,13 +142,8 @@ func (psc *ParticipantBlockSignaturesCache) Get(participant string, skipIndex in
 }
 
 // GetItem get block signature at index for participant
-func (psc *ParticipantBlockSignaturesCache) GetItem(participant string, index int64) (BlockSignature, error) {
-	id, err := psc.participantID(participant)
-	if err != nil {
-		return BlockSignature{}, err
-	}
-
-	item, err := psc.rim.GetItem(id, index)
+func (psc *ParticipantBlockSignaturesCache) GetItem(participant common.Address, index int64) (BlockSignature, error) {
+	item, err := psc.rim.GetItem(participant, index)
 	if err != nil {
 		return BlockSignature{}, err
 	}
@@ -200,8 +151,8 @@ func (psc *ParticipantBlockSignaturesCache) GetItem(participant string, index in
 }
 
 // GetLast get last block signature for participant
-func (psc *ParticipantBlockSignaturesCache) GetLast(participant string) (BlockSignature, error) {
-	last, err := psc.rim.GetLast(psc.participants.ByPubKey[participant].ID)
+func (psc *ParticipantBlockSignaturesCache) GetLast(participant common.Address) (BlockSignature, error) {
+	last, err := psc.rim.GetLast(participant)
 
 	if err != nil {
 		return BlockSignature{}, err
@@ -211,17 +162,12 @@ func (psc *ParticipantBlockSignaturesCache) GetLast(participant string) (BlockSi
 }
 
 // Set sets the last block signature for the participant
-func (psc *ParticipantBlockSignaturesCache) Set(participant string, sig BlockSignature) error {
-	id, err := psc.participantID(participant)
-	if err != nil {
-		return err
-	}
-
-	return psc.rim.Set(id, sig, sig.Index)
+func (psc *ParticipantBlockSignaturesCache) Set(participant common.Address, sig BlockSignature) error {
+	return psc.rim.Set(participant, sig, sig.Index)
 }
 
 // Known returns [participant id] => last BlockSignature Index
-func (psc *ParticipantBlockSignaturesCache) Known() map[uint64]int64 {
+func (psc *ParticipantBlockSignaturesCache) Known() map[common.Address]int64 {
 	return psc.rim.Known()
 }
 

@@ -3,27 +3,37 @@ package poset
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"fmt"
 	"reflect"
 
+	"github.com/golang/protobuf/proto"
+
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
-	"github.com/golang/protobuf/proto"
 )
 
-/*******************************************************************************
-InternalTransactions
-*******************************************************************************/
+const (
+	// LamportTimestampNIL provides nil value for lamport.
+	LamportTimestampNIL int64 = -1
 
-// NewInternalTransaction constructor
+	// RoundNIL provides nil value for round.
+	RoundNIL int64 = -1
+)
+
+/*
+ * InternalTransaction
+ */
+
+// NewInternalTransaction constructor.
 func NewInternalTransaction(tType TransactionType, peer peers.Peer) InternalTransaction {
 	return InternalTransaction{
-		Type: tType,
-		Peer: &peer,
+		Type:    tType,
+		NetAddr: peer.NetAddr,
+		PubKey:  peer.PubKey,
 	}
 }
 
-// ProtoMarshal marshal internal transaction to protobuff
+// ProtoMarshal marshal internal transaction to protobuff.
 func (t *InternalTransaction) ProtoMarshal() ([]byte, error) {
 	var bf proto.Buffer
 	bf.SetDeterministic(true)
@@ -33,22 +43,24 @@ func (t *InternalTransaction) ProtoMarshal() ([]byte, error) {
 	return bf.Bytes(), nil
 }
 
-// ProtoUnmarshal unmarshal protobuff to internal transaction
+// ProtoUnmarshal unmarshal protobuff to internal transaction.
 func (t *InternalTransaction) ProtoUnmarshal(data []byte) error {
 	return proto.Unmarshal(data, t)
 }
 
-/*******************************************************************************
-EventBody
-*******************************************************************************/
+/*
+ * EventBody
+ */
 
-// Equals equality check for internal transaction
+// Equals equality check for internal transaction.
 func (t *InternalTransaction) Equals(that *InternalTransaction) bool {
-	return t.Peer.Equals(that.Peer) &&
-		t.Type == that.Type
+	return t.Type == that.Type &&
+		t.NetAddr == that.NetAddr &&
+		t.Amount == that.Amount &&
+		bytes.Equal(t.PubKey, that.PubKey)
 }
 
-// InternalTransactionListEquals list equality check
+// InternalTransactionListEquals list equality check.
 func InternalTransactionListEquals(this []*InternalTransaction, that []*InternalTransaction) bool {
 	if len(this) != len(that) {
 		return false
@@ -61,7 +73,7 @@ func InternalTransactionListEquals(this []*InternalTransaction, that []*Internal
 	return true
 }
 
-// BlockSignatureListEquals block signature list equality check
+// BlockSignatureListEquals block signature list equality check.
 func BlockSignatureListEquals(this []*BlockSignature, that []*BlockSignature) bool {
 	if len(this) != len(that) {
 		return false
@@ -74,12 +86,12 @@ func BlockSignatureListEquals(this []*BlockSignature, that []*BlockSignature) bo
 	return true
 }
 
-// Equals event body equality check
+// Equals event body equality check.
 func (e *EventBody) Equals(that *EventBody) bool {
 	return reflect.DeepEqual(e.Transactions, that.Transactions) &&
 		InternalTransactionListEquals(e.InternalTransactions, that.InternalTransactions) &&
 		reflect.DeepEqual(e.Parents, that.Parents) &&
-		reflect.DeepEqual(e.Creator, that.Creator) &&
+		reflect.DeepEqual(e.CreatorPK, that.CreatorPK) &&
 		e.Index == that.Index &&
 		BlockSignatureListEquals(e.BlockSignatures, that.BlockSignatures)
 }
@@ -100,26 +112,19 @@ func (e *EventBody) ProtoUnmarshal(data []byte) error {
 }
 
 // Hash returns hash of event body
-func (e *EventBody) Hash() (hash EventHash, err error) {
-	var bytes []byte
-	bytes, err = e.ProtoMarshal()
+func (e *EventBody) Hash() EventHash {
+	bytes, err := e.ProtoMarshal()
 	if err != nil {
-		return
+		panic(err)
 	}
-	return CalcEventHash(bytes), nil
+	return CalcEventHash(bytes)
 }
 
-/*******************************************************************************
-Event
-*******************************************************************************/
+/*
+ * EventMessage
+ */
 
-// LamportTimestampNIL nil value for lamport
-const LamportTimestampNIL int64 = -1
-
-// RoundNIL nil value for round
-const RoundNIL int64 = -1
-
-// ToEvent converts message to event
+// ToEvent converts message to event.
 func (m *EventMessage) ToEvent() Event {
 	return Event{
 		Message:          m,
@@ -129,7 +134,7 @@ func (m *EventMessage) ToEvent() Event {
 	}
 }
 
-// Equals compares equality of two event messages
+// Equals compares equality of two event messages.
 func (m *EventMessage) Equals(that *EventMessage) bool {
 	return m.Body.Equals(that.Body) &&
 		m.Signature == that.Signature &&
@@ -137,12 +142,18 @@ func (m *EventMessage) Equals(that *EventMessage) bool {
 		reflect.DeepEqual(m.ClothoProof, that.ClothoProof)
 }
 
+/*
+ * Event
+ */
+
 // NewEvent creates new block event.
 func NewEvent(
 	transactions [][]byte,
 	internalTransactions []InternalTransaction,
 	blockSignatures []BlockSignature,
-	parents EventHashes, creator []byte, index int64,
+	parents EventHashes,
+	creatorPK []byte,
+	index int64,
 	ft FlagTable) Event {
 
 	internalTransactionPointers := make([]*InternalTransaction, len(internalTransactions))
@@ -161,7 +172,7 @@ func NewEvent(
 		InternalTransactions: internalTransactionPointers,
 		BlockSignatures:      blockSignaturePointers,
 		Parents:              parents.Bytes(),
-		Creator:              creator,
+		CreatorPK:            creatorPK,
 		Index:                index,
 	}
 
@@ -169,6 +180,7 @@ func NewEvent(
 		Message: &EventMessage{
 			Body:      &body,
 			FlagTable: ft.Marshal(),
+			Hash:      body.Hash().Bytes(),
 		},
 		lamportTimestamp: LamportTimestampNIL,
 		round:            RoundNIL,
@@ -208,9 +220,9 @@ func (e *Event) GetLamportTimestamp() int64 {
 	return e.lamportTimestamp
 }
 
-// GetCreator returns the creator for the event
-func (e *Event) GetCreator() string {
-	return fmt.Sprintf("0x%X", e.Message.Body.Creator)
+// CreatorPK returns the creator's PK for the event
+func (e *Event) CreatorPK() []byte {
+	return e.Message.Body.CreatorPK
 }
 
 // SelfParent returns the previous event block hash in this creator DAG
@@ -259,10 +271,7 @@ func (e *Event) IsLoaded() bool {
 
 // Sign ecdsa sig
 func (e *Event) Sign(privKey *ecdsa.PrivateKey) error {
-	hash, err := e.Message.Body.Hash()
-	if err != nil {
-		return err
-	}
+	hash := e.Message.Body.Hash()
 	R, S, err := crypto.Sign(privKey, hash.Bytes())
 	if err != nil {
 		return err
@@ -273,13 +282,9 @@ func (e *Event) Sign(privKey *ecdsa.PrivateKey) error {
 
 // Verify ecdsa sig
 func (e *Event) Verify() (bool, error) {
-	pubBytes := e.Message.Body.Creator
+	pubBytes := e.Message.Body.CreatorPK
 	pubKey := crypto.ToECDSAPub(pubBytes)
-
-	hash, err := e.Message.Body.Hash()
-	if err != nil {
-		return false, err
-	}
+	hash := e.Message.Body.Hash()
 
 	r, s, err := crypto.DecodeSignature(e.Message.Signature)
 	if err != nil {
@@ -307,15 +312,12 @@ func (e *Event) ProtoUnmarshal(data []byte) error {
 
 // Hash sha256 hash of body
 func (e *Event) Hash() (hash EventHash) {
-	var err error
 	if len(e.Message.Hash) == 0 {
-		hash, err = e.Message.Body.Hash()
-		if err != nil {
-			panic(err)
-		}
+		hash = e.Message.Body.Hash()
 		e.Message.Hash = hash.Bytes()
+	} else {
+		hash.Set(e.Message.Hash)
 	}
-	hash.Set(e.Message.Hash)
 	return
 }
 
@@ -335,11 +337,11 @@ func (e *Event) SetRoundReceived(rr int64) {
 }
 
 // SetWireInfo for event
-func (e *Event) SetWireInfo(selfParentIndex int64, otherParentCreatorID uint64, otherParentIndex int64, creatorID uint64) {
+func (e *Event) SetWireInfo(selfParentIndex int64, otherParentCreatorID common.Address, otherParentIndex int64, creatorID common.Address) {
 	e.Message.SelfParentIndex = selfParentIndex
-	e.Message.OtherParentCreatorID = otherParentCreatorID
+	e.Message.OtherParentCreatorID = otherParentCreatorID.Bytes()
 	e.Message.OtherParentIndex = otherParentIndex
-	e.Message.CreatorID = creatorID
+	e.Message.CreatorID = creatorID.Bytes()
 }
 
 // WireBlockSignatures returns the wire block signatures for the event
@@ -408,14 +410,22 @@ func (e *Event) MergeFlagTable(dst FlagTable) (FlagTable, error) {
 	return res, nil
 }
 
-// CreatorID returns the creator ID for an event
-func (e *Event) CreatorID() uint64 {
-	return e.Message.CreatorID
+// CreatorAddress returns the creator's address for an event.
+func (e *Event) CreatorAddress() common.Address {
+	if len(e.Message.CreatorID) < 1 {
+		e.Message.CreatorID = crypto.AddressOfPK(e.Message.Body.CreatorPK).Bytes()
+	}
+	return common.BytesToAddress(e.Message.CreatorID)
 }
 
-// OtherParentCreatorID ID of other parent(s)
-func (e *Event) OtherParentCreatorID() uint64 {
-	return e.Message.OtherParentCreatorID
+// OtherParentAddress returns the  other parent's ID for an event.
+func (e *Event) OtherParentAddress() common.Address {
+	// NOTE: for debug
+	if len(e.Message.OtherParentCreatorID) < 1 {
+		panic(".Message.OtherParentCreatorID is not set")
+		// crypto.AddressOfPK(e.Message.Body.CreatorPK)
+	}
+	return common.BytesToAddress(e.Message.OtherParentCreatorID)
 }
 
 /*******************************************************************************
@@ -463,9 +473,9 @@ type WireBody struct {
 	BlockSignatures      []WireBlockSignature
 
 	SelfParentIndex      int64
-	OtherParentCreatorID uint64
+	OtherParentCreatorID []byte
 	OtherParentIndex     int64
-	CreatorID            uint64
+	CreatorID            []byte
 
 	Index int64
 }
