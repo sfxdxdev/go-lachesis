@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	lnet "github.com/Fantom-foundation/go-lachesis/src/net"
 	"github.com/Fantom-foundation/go-lachesis/src/net/peer"
 )
@@ -206,4 +207,16 @@ func TestMain(m *testing.M) {
 	logger = newTestLogger()
 
 	os.Exit(m.Run())
+}
+
+/*
+ * Staff:
+ */
+
+func fakeAddress(n int64) (h common.Address) {
+	for i := 8; i >= 1; i-- {
+		h[i-1] = byte(n)
+		n = n >> 8
+	}
+	return
 }

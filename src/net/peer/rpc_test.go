@@ -137,7 +137,7 @@ func TestLachesisForceSync(t *testing.T) {
 
 func TestLachesisFastForward(t *testing.T) {
 	request := &net.FastForwardRequest{
-		FromID: 0,
+		FromID: fakeAddress(0),
 	}
 
 	expResponse := newFastForwardResponse(t)

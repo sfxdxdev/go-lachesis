@@ -12,6 +12,7 @@ import (
 
 	"github.com/pkg/errors"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	lnet "github.com/Fantom-foundation/go-lachesis/src/net"
 	"github.com/Fantom-foundation/go-lachesis/src/net/fakenet"
 	"github.com/Fantom-foundation/go-lachesis/src/net/peer"
@@ -20,40 +21,48 @@ import (
 
 var (
 	expEagerSyncRequest = &lnet.EagerSyncRequest{
-		FromID: 0,
+		FromID: fakeAddress(0),
 		Events: []poset.WireEvent{
 			{
 				Body: poset.WireBody{
 					Transactions:         [][]byte(nil),
 					SelfParentIndex:      1,
-					OtherParentCreatorID: 10,
+					OtherParentCreatorID: fakeAddress(10).Bytes(),
 					OtherParentIndex:     0,
-					CreatorID:            9,
+					CreatorID:            fakeAddress(9).Bytes(),
 				},
 			},
 		},
 	}
-	expEagerSyncResponse  = &lnet.EagerSyncResponse{FromID: 1, Success: true}
-	expFastForwardRequest = &lnet.FastForwardRequest{FromID: 0}
+	expEagerSyncResponse  = &lnet.EagerSyncResponse{FromID: fakeAddress(1), Success: true}
+	expFastForwardRequest = &lnet.FastForwardRequest{FromID: fakeAddress(0)}
 	expSyncRequest        = &lnet.SyncRequest{
-		FromID: 0,
-		Known:  map[uint64]int64{0: 1, 1: 2, 2: 3},
+		FromID: fakeAddress(0),
+		Known: map[common.Address]int64{
+			fakeAddress(0): 1,
+			fakeAddress(1): 2,
+			fakeAddress(2): 3,
+		},
 	}
 
 	expSyncResponse = &lnet.SyncResponse{
-		FromID: 1,
+		FromID: fakeAddress(1),
 		Events: []poset.WireEvent{
 			{
 				Body: poset.WireBody{
 					Transactions:         [][]byte(nil),
 					SelfParentIndex:      1,
-					OtherParentCreatorID: 10,
+					OtherParentCreatorID: fakeAddress(10).Bytes(),
 					OtherParentIndex:     0,
-					CreatorID:            9,
+					CreatorID:            fakeAddress(9).Bytes(),
 				},
 			},
 		},
-		Known: map[uint64]int64{0: 5, 1: 5, 2: 6},
+		Known: map[common.Address]int64{
+			fakeAddress(0): 5,
+			fakeAddress(1): 5,
+			fakeAddress(2): 6,
+		},
 	}
 	testError = errors.New("error")
 )
@@ -257,7 +266,7 @@ func newFastForwardResponse(t *testing.T) *lnet.FastForwardResponse {
 	}
 
 	return &lnet.FastForwardResponse{
-		FromID:   1,
+		FromID:   fakeAddress(1),
 		Block:    block,
 		Frame:    frame,
 		Snapshot: []byte("snapshot"),

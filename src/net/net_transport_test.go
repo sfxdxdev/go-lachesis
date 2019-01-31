@@ -33,31 +33,31 @@ func TestNetworkTransport(t *testing.T) {
 		assert := assert.New(t)
 
 		expectedReq := &SyncRequest{
-			FromID: 0,
-			Known: map[uint64]int64{
-				0: 1,
-				1: 2,
-				2: 3,
+			FromID: fakeAddr(0),
+			Known: map[common.Address]int64{
+				fakeAddr(0): 1,
+				fakeAddr(1): 2,
+				fakeAddr(2): 3,
 			},
 		}
 
 		expectedResp := &SyncResponse{
-			FromID: 1,
+			FromID: fakeAddr(1),
 			Events: []poset.WireEvent{
 				poset.WireEvent{
 					Body: poset.WireBody{
 						Transactions:         [][]byte(nil),
 						SelfParentIndex:      1,
-						OtherParentCreatorID: 10,
+						OtherParentCreatorID: []byte{10},
 						OtherParentIndex:     0,
-						CreatorID:            9,
+						CreatorID:            []byte{9},
 					},
 				},
 			},
-			Known: map[uint64]int64{
-				0: 5,
-				1: 5,
-				2: 6,
+			Known: map[common.Address]int64{
+				fakeAddr(0): 5,
+				fakeAddr(1): 5,
+				fakeAddr(2): 6,
 			},
 		}
 
@@ -97,4 +97,8 @@ func TestNetworkTransport(t *testing.T) {
 		addr := trans1.LocalAddr()
 		assert.Equal(maxPool, len(trans2.connPool[addr]))
 	})
+}
+
+func fakeAddr(n byte) common.Address {
+	return common.BytesToAddress([]byte{n})
 }
