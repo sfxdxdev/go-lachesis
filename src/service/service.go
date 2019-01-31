@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
+
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/node"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
-	"github.com/sirupsen/logrus"
 )
 
 // Service http API service struct
@@ -121,7 +123,15 @@ func (s *Service) GetEventBlock(w http.ResponseWriter, r *http.Request) {
 // GetLastEventFrom returns the last event for a specific participant
 func (s *Service) GetLastEventFrom(w http.ResponseWriter, r *http.Request) {
 	param := r.URL.Path[len("/lasteventfrom/"):]
-	event, _, err := s.node.GetLastEventFrom(param)
+
+	var id common.Address
+	err := id.UnmarshalText([]byte(param))
+	if err != nil {
+		s.logger.WithError(err).Errorf("Retrieving event %s", param)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+
+	event, _, err := s.node.GetLastEventFrom(id)
 	if err != nil {
 		s.logger.WithError(err).Errorf("Retrieving event %s", event)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -206,10 +216,11 @@ func (s *Service) GetRoundClothos(w http.ResponseWriter, r *http.Request) {
 // GetRoundEvents returns all the events for a given round
 func (s *Service) GetRoundEvents(w http.ResponseWriter, r *http.Request) {
 	param := r.URL.Path[len("/roundevents/"):]
+
 	roundEventsIndex, err := strconv.ParseInt(param, 10, 64)
 	if err != nil {
 		s.logger.WithError(err).Errorf("Parsing roundEventsIndex parameter %s", param)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -224,7 +235,15 @@ func (s *Service) GetRoundEvents(w http.ResponseWriter, r *http.Request) {
 // GetRoot returns the root for a given frame
 func (s *Service) GetRoot(w http.ResponseWriter, r *http.Request) {
 	param := r.URL.Path[len("/root/"):]
-	root, err := s.node.GetRoot(param)
+
+	var id common.Address
+	err := id.UnmarshalText([]byte(param))
+	if err != nil {
+		s.logger.WithError(err).Errorf("Retrieving root %s", param)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+
+	root, err := s.node.GetRoot(id)
 	if err != nil {
 		s.logger.WithError(err).Errorf("Retrieving root %s", param)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
