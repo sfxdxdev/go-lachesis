@@ -63,7 +63,7 @@ func (l *Lachesis) initPeers() error {
 
 	peerStore := peers.NewJSONPeers(l.Config.DataDir)
 
-	participants, err := peerStore.Peers()
+	participants, err := peerStore.Read()
 
 	if err != nil {
 		return err
@@ -131,23 +131,20 @@ func (l *Lachesis) initKey() error {
 func (l *Lachesis) initNode() error {
 	key := l.Config.Key
 
-	nodePub := fmt.Sprintf("0x%X", crypto.FromECDSAPub(&key.PublicKey))
-	n, ok := l.Peers.ByPubKey[nodePub]
-
-	if !ok {
+	nodePub := crypto.FromECDSAPub(&key.PublicKey)
+	id := crypto.AddressOfPK(nodePub)
+	if _, ok := l.Peers.ByID[id]; !ok {
 		return fmt.Errorf("cannot find self pubkey in peers.json")
 	}
 
-	nodeID := n.ID
-
 	l.Config.Logger.WithFields(logrus.Fields{
 		"participants": l.Peers,
-		"id":           nodeID,
+		"id":           id,
 	}).Debug("PARTICIPANTS")
 
 	l.Node = node.NewNode(
 		&l.Config.NodeConfig,
-		nodeID,
+		id,
 		key,
 		l.Peers,
 		l.Store,
