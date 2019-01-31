@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 )
 
 // GenerateECDSAKey generate ECDSA Key
@@ -55,4 +57,9 @@ func DecodeSignature(sig string) (r, s *big.Int, err error) {
 	r, _ = new(big.Int).SetString(values[0], 36)
 	s, _ = new(big.Int).SetString(values[1], 36)
 	return r, s, nil
+}
+
+// AddressOfPK calcs address as hash of public key.
+func AddressOfPK(pk []byte) common.Address {
+	return common.Address(Keccak256Hash(pk))
 }

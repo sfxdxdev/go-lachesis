@@ -25,7 +25,7 @@ var (
 type Hash [HashLength]byte
 
 // BytesToHash sets b to hash.
-// If b is larger than len(h), b will be cropped from the left.
+// If b is larger than len(h), b will be cropped from the right.
 func BytesToHash(b []byte) Hash {
 	var h Hash
 	h.SetBytes(b)

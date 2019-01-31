@@ -179,13 +179,11 @@ func ExcludePeer(peers []*Peer, peer string) (int, []*Peer) {
 }
 
 // ExcludePeers is used to exclude multiple peers from a list of peers.
-func ExcludePeers(peers []*Peer, local string, last string) []*Peer {
+func ExcludePeers(peers []*Peer, local string, last common.Address) []*Peer {
 	otherPeers := make([]*Peer, 0, len(peers))
 	for _, p := range peers {
 		if p.NetAddr != local &&
-			p.NetAddr != last &&
-			common.ToHex(p.PubKey) != local &&
-			common.ToHex(p.PubKey) != last {
+			p.ID != last {
 			otherPeers = append(otherPeers, p)
 		}
 	}
