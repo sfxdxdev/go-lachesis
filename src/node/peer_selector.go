@@ -3,6 +3,7 @@ package node
 import (
 	"math/rand"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 )
 
@@ -11,7 +12,7 @@ import (
 // to gossip with
 type PeerSelector interface {
 	Peers() *peers.Peers
-	UpdateLast(peer string)
+	UpdateLast(peer *peers.Peer)
 	Next() *peers.Peer
 }
 
@@ -19,7 +20,7 @@ type PeerSelector interface {
 type RandomPeerSelector struct {
 	peers     *peers.Peers
 	localAddr string
-	last      string
+	last      common.Address
 }
 
 // NewRandomPeerSelector creates a new random peer selector
@@ -36,8 +37,8 @@ func (ps *RandomPeerSelector) Peers() *peers.Peers {
 }
 
 // UpdateLast sets the last peer communicated with (to avoid double talk)
-func (ps *RandomPeerSelector) UpdateLast(peer string) {
-	ps.last = peer
+func (ps *RandomPeerSelector) UpdateLast(peer *peers.Peer) {
+	ps.last = peer.ID
 }
 
 // Next returns the next randomly selected peer(s) to communicate with

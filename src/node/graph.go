@@ -1,12 +1,13 @@
 package node
 
 import (
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
 
 // Infos struct for graph data (visualizer)
 type Infos struct {
-	ParticipantEvents map[string]map[poset.EventHash]poset.Event
+	ParticipantEvents map[common.Address]map[poset.EventHash]poset.Event
 	Rounds            []poset.RoundCreated
 	Blocks            []poset.Block
 }
@@ -38,33 +39,33 @@ func (g *Graph) GetBlocks() []poset.Block {
 }
 
 // GetParticipantEvents returns all known events per participant
-func (g *Graph) GetParticipantEvents() map[string]map[poset.EventHash]poset.Event {
-	res := make(map[string]map[poset.EventHash]poset.Event)
+func (g *Graph) GetParticipantEvents() map[common.Address]map[poset.EventHash]poset.Event {
+	res := make(map[common.Address]map[poset.EventHash]poset.Event)
 
 	store := g.Node.core.poset.Store
-	repertoire := g.Node.core.poset.Store.RepertoireByPubKey()
+	repertoire := g.Node.core.poset.Store.RepertoireByID()
 	known := store.KnownEvents()
-	for _, p := range repertoire {
-		root, err := store.GetRoot(p.PubKeyHex)
+	for id := range repertoire {
+		root, err := store.GetRoot(id)
 
 		if err != nil {
 			panic(err)
 		}
 
-		skip := known[p.ID] - 30
+		skip := known[id] - 30
 		if skip < 0 {
 			skip = -1
 		}
 
-		evs, err := store.ParticipantEvents(p.PubKeyHex, skip)
+		evs, err := store.ParticipantEvents(id, skip)
 
 		if err != nil {
 			panic(err)
 		}
 
-		res[p.PubKeyHex] = make(map[poset.EventHash]poset.Event)
+		res[id] = make(map[poset.EventHash]poset.Event)
 
-		selfParent := poset.GenRootSelfParent(p.ID)
+		selfParent := poset.GenRootSelfParent(id)
 
 		flagTable := poset.FlagTable{}
 		flagTable[selfParent] = 1
@@ -78,7 +79,7 @@ func (g *Graph) GetParticipantEvents() map[string]map[poset.EventHash]poset.Even
 		// TODO: initialEvent.Hash() instead of rootSelfParentHash ?
 		rootSelfParentHash := poset.EventHash{}
 		rootSelfParentHash.Set(root.SelfParent.Hash)
-		res[p.PubKeyHex][rootSelfParentHash] = initialEvent
+		res[id][rootSelfParentHash] = initialEvent
 
 		for _, e := range evs {
 			event, err := store.GetEventBlock(e)
@@ -89,7 +90,7 @@ func (g *Graph) GetParticipantEvents() map[string]map[poset.EventHash]poset.Even
 
 			hash := event.Hash()
 
-			res[p.PubKeyHex][hash] = event
+			res[id][hash] = event
 		}
 	}
 

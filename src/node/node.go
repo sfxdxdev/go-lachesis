@@ -12,6 +12,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/net"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
@@ -25,7 +26,7 @@ type Node struct {
 	conf   *Config
 	logger *logrus.Entry
 
-	id       uint64
+	id       common.Address
 	core     *Core
 	coreLock sync.Mutex
 
@@ -37,7 +38,7 @@ type Node struct {
 	trans net.Transport
 	netCh <-chan *net.RPC
 
-	proxy            proxy.AppProxy
+	proxy proxy.AppProxy
 
 	submitCh         chan []byte
 	submitInternalCh chan poset.InternalTransaction
@@ -58,7 +59,7 @@ type Node struct {
 
 // NewNode create a new node struct
 func NewNode(conf *Config,
-	id uint64,
+	id common.Address,
 	key *ecdsa.PrivateKey,
 	participants *peers.Peers,
 	store poset.Store,
@@ -72,11 +73,8 @@ func NewNode(conf *Config,
 	commitCh := make(chan poset.Block, 400)
 	core := NewCore(id, key, pmap, store, commitCh, conf.Logger)
 
-	pubKey := core.HexID()
-
 	// peerSelector := NewRandomPeerSelector(participants, localAddr)
-	peerSelector := NewSmartPeerSelector(participants, pubKey,
-		core.poset.GetPeerFlagTableOfRandomUndeterminedEvent)
+	peerSelector := NewSmartPeerSelector(participants, localAddr, core.poset.GetPeerFlagTableOfRandomUndeterminedEvent)
 
 	node := Node{
 		id:               id,
@@ -103,7 +101,7 @@ func NewNode(conf *Config,
 	signal.Notify(node.signalTERMch, syscall.SIGTERM, os.Kill)
 
 	node.logger.WithField("peers", pmap).Debug("pmap")
-	node.logger.WithField("pubKey", pubKey).Debug("pubKey")
+	node.logger.WithField("id", id).Debug("id")
 
 	node.needBoostrap = store.NeedBoostrap()
 
@@ -234,11 +232,11 @@ func (n *Node) lachesis(gossip bool) {
 		case <-n.controlTimer.tickCh:
 			if gossip && n.gossipJobs.get() < 1 {
 				n.selectorLock.Lock()
-				peerAddr := n.peerSelector.Next().NetAddr
+				peer := n.peerSelector.Next()
 				n.selectorLock.Unlock()
 				n.goFunc(func() {
 					n.gossipJobs.increment()
-					n.gossip(peerAddr, returnCh)
+					n.gossip(peer, returnCh)
 					n.gossipJobs.decrement()
 				})
 				n.logger.Debug("Gossip")
@@ -386,37 +384,37 @@ func (n *Node) processFastForwardRequest(rpc *net.RPC, cmd *net.FastForwardReque
 // This function is usually called in a go-routine and needs to inform the
 // calling routine (usually the lachesis routine) when it is time to exit the
 // Gossiping state and return.
-func (n *Node) gossip(peerAddr string, parentReturnCh chan struct{}) error {
+func (n *Node) gossip(peer *peers.Peer, parentReturnCh chan struct{}) error {
 
 	// pull
-	syncLimit, otherKnownEvents, err := n.pull(peerAddr)
+	syncLimit, otherKnownEvents, err := n.pull(peer.NetAddr)
 	if err != nil {
 		return err
 	}
 
 	// check and handle syncLimit
 	if syncLimit {
-		n.logger.WithField("from", peerAddr).Debug("SyncLimit")
+		n.logger.WithField("from", peer.NetAddr).Debug("SyncLimit")
 		n.setState(CatchingUp)
 		parentReturnCh <- struct{}{}
 		return nil
 	}
 
 	// push
-	err = n.push(peerAddr, otherKnownEvents)
+	err = n.push(peer.NetAddr, otherKnownEvents)
 	if err != nil {
 		return err
 	}
 
 	// update peer selector
 	n.selectorLock.Lock()
-	n.peerSelector.UpdateLast(peerAddr)
+	n.peerSelector.UpdateLast(peer)
 	n.selectorLock.Unlock()
 
 	return nil
 }
 
-func (n *Node) pull(peerAddr string) (syncLimit bool, otherKnownEvents map[uint64]int64, err error) {
+func (n *Node) pull(peerAddr string) (syncLimit bool, otherKnownEvents map[common.Address]int64, err error) {
 	// Compute Known
 	n.coreLock.Lock()
 	knownEvents := n.core.KnownEvents()
@@ -459,7 +457,7 @@ func (n *Node) pull(peerAddr string) (syncLimit bool, otherKnownEvents map[uint6
 	return false, resp.Known, nil
 }
 
-func (n *Node) push(peerAddr string, knownEvents map[uint64]int64) error {
+func (n *Node) push(peerAddr string, knownEvents map[common.Address]int64) error {
 
 	// Check SyncLimit
 	n.coreLock.Lock()
@@ -538,7 +536,7 @@ func (n *Node) fastForward() error {
 
 	// prepare core. ie: fresh poset
 	n.coreLock.Lock()
-	err = n.core.FastForward(peer.PubKeyHex, resp.Block, resp.Frame)
+	err = n.core.FastForward(peer.ID, resp.Block, resp.Frame)
 	n.coreLock.Unlock()
 	if err != nil {
 		n.logger.WithField("Error", err).Error("n.core.FastForward(peer.PubKeyHex, resp.Block, resp.Frame)")
@@ -557,7 +555,7 @@ func (n *Node) fastForward() error {
 	return nil
 }
 
-func (n *Node) requestSync(target string, known map[uint64]int64) (net.SyncResponse, error) {
+func (n *Node) requestSync(target string, known map[common.Address]int64) (net.SyncResponse, error) {
 
 	args := net.SyncRequest{
 		FromID: n.id,
@@ -719,7 +717,7 @@ func (n *Node) GetStats() map[string]string {
 	lastConsensusRound := n.core.GetLastConsensusRound()
 	var consensusRoundsPerSecond float64
 	if lastConsensusRound > poset.RoundNIL {
-		consensusRoundsPerSecond = float64(lastConsensusRound + 1) / timeElapsed.Seconds()
+		consensusRoundsPerSecond = float64(lastConsensusRound+1) / timeElapsed.Seconds()
 	}
 
 	s := map[string]string{
@@ -792,17 +790,17 @@ func (n *Node) GetEventBlock(event poset.EventHash) (poset.Event, error) {
 }
 
 // GetLastEventFrom returns the last event block for a specific participant
-func (n *Node) GetLastEventFrom(participant string) (poset.EventHash, bool, error) {
+func (n *Node) GetLastEventFrom(participant common.Address) (poset.EventHash, bool, error) {
 	return n.core.poset.Store.LastEventFrom(participant)
 }
 
 // GetKnownEvents returns all known events
-func (n *Node) GetKnownEvents() map[uint64]int64 {
+func (n *Node) GetKnownEvents() map[common.Address]int64 {
 	return n.core.poset.Store.KnownEvents()
 }
 
 // GetEventBlocks returns all event blocks
-func (n *Node) GetEventBlocks() (map[uint64]int64, error) {
+func (n *Node) GetEventBlocks() (map[common.Address]int64, error) {
 	res := n.core.KnownEvents()
 	return res, nil
 }
@@ -843,7 +841,7 @@ func (n *Node) GetRoundEvents(roundIndex int64) int {
 }
 
 // GetRoot returns the chain root for the frame
-func (n *Node) GetRoot(rootIndex string) (poset.Root, error) {
+func (n *Node) GetRoot(rootIndex common.Address) (poset.Root, error) {
 	return n.core.poset.Store.GetRoot(rootIndex)
 }
 
@@ -853,7 +851,7 @@ func (n *Node) GetBlock(blockIndex int64) (poset.Block, error) {
 }
 
 // ID shows the ID of the node
-func (n *Node) ID() uint64 {
+func (n *Node) ID() common.Address {
 	return n.id
 }
 

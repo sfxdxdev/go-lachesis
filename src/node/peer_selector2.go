@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 )
 
@@ -11,14 +12,14 @@ import (
 type SmartPeerSelector struct {
 	peers        *peers.Peers
 	localAddr    string
-	last         string
-	GetFlagTable func() (map[string]int64, error)
+	last         common.Address
+	GetFlagTable func() (map[common.Address]int64, error)
 }
 
 // NewSmartPeerSelector creates a new smart peer selection struct
 func NewSmartPeerSelector(participants *peers.Peers,
 	localAddr string,
-	GetFlagTable func() (map[string]int64, error)) *SmartPeerSelector {
+	GetFlagTable func() (map[common.Address]int64, error)) *SmartPeerSelector {
 
 	return &SmartPeerSelector{
 		localAddr:    localAddr,
@@ -33,8 +34,8 @@ func (ps *SmartPeerSelector) Peers() *peers.Peers {
 }
 
 // UpdateLast sets the last peer communicated with (avoid double talk)
-func (ps *SmartPeerSelector) UpdateLast(peer string) {
-	ps.last = peer
+func (ps *SmartPeerSelector) UpdateLast(peer *peers.Peer) {
+	ps.last = peer.ID
 }
 
 // Next returns the next peer based on the flag table cost function selection
@@ -57,19 +58,19 @@ func (ps *SmartPeerSelector) Next() *peers.Peer {
 	flagged := make([]*peers.Peer, len(sortedSrc))
 	fCount := 0
 	minUsedIdx := 0
-	minUsedVal := int64(math.MaxInt64)
+	minUsedVal := uint64(math.MaxInt64)
 	var lastused []*peers.Peer
 
 	for _, p := range sortedSrc {
 		if p.NetAddr == ps.localAddr {
 			continue
 		}
-		if p.NetAddr == ps.last || p.PubKeyHex == ps.last {
+		if p.ID == ps.last {
 			lastused = append(lastused, p)
 			continue
 		}
 
-		if f, ok := flagTable[p.PubKeyHex]; ok && f == 1 {
+		if f, ok := flagTable[p.ID]; ok && f == 1 {
 			flagged[fCount] = p
 			fCount += 1
 			continue

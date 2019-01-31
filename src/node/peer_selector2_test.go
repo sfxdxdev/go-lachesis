@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 )
 
@@ -17,7 +18,7 @@ func TestSmartSelectorEmpty(t *testing.T) {
 	ss := NewSmartPeerSelector(
 		fp,
 		"",
-		func() (map[string]int64, error) {
+		func() (map[common.Address]int64, error) {
 			return nil, nil
 		},
 	)
@@ -34,7 +35,7 @@ func TestSmartSelectorLocalAddrOnly(t *testing.T) {
 	ss := NewSmartPeerSelector(
 		fp,
 		fps[0].NetAddr,
-		func() (map[string]int64, error) {
+		func() (map[common.Address]int64, error) {
 			return nil, nil
 		},
 	)
@@ -51,14 +52,20 @@ func TestSmartSelectorUsed(t *testing.T) {
 	ss := NewSmartPeerSelector(
 		fp,
 		fps[0].NetAddr,
-		func() (map[string]int64, error) {
+		func() (map[common.Address]int64, error) {
 			return nil, nil
 		},
 	)
 
-	assert.Equal(fps[1].NetAddr, ss.Next().NetAddr)
-	assert.Equal(fps[1].NetAddr, ss.Next().NetAddr)
-	assert.Equal(fps[1].NetAddr, ss.Next().NetAddr)
+	choose1 := ss.Next().NetAddr
+	assert.NotEqual(fps[0].NetAddr, choose1)
+
+	choose2 := ss.Next().NetAddr
+	assert.NotEqual(fps[0].NetAddr, choose2)
+	assert.NotEqual(choose1, choose2)
+
+	choose3 := ss.Next().NetAddr
+	assert.NotEqual(fps[0].NetAddr, choose3)
 }
 
 func TestSmartSelectorFlagged(t *testing.T) {
@@ -70,9 +77,9 @@ func TestSmartSelectorFlagged(t *testing.T) {
 	ss := NewSmartPeerSelector(
 		fp,
 		fps[0].NetAddr,
-		func() (map[string]int64, error) {
-			return map[string]int64{
-				fps[2].PubKeyHex: 1,
+		func() (map[common.Address]int64, error) {
+			return map[common.Address]int64{
+				fps[2].ID: 1,
 			}, nil
 		},
 	)
@@ -91,12 +98,12 @@ func TestSmartSelectorGeneral(t *testing.T) {
 	ss := NewSmartPeerSelector(
 		fp,
 		fps[3].NetAddr,
-		func() (map[string]int64, error) {
-			return map[string]int64{
-				fps[0].PubKeyHex: 0,
-				fps[1].PubKeyHex: 0,
-				fps[2].PubKeyHex: 1,
-				fps[3].PubKeyHex: 0,
+		func() (map[common.Address]int64, error) {
+			return map[common.Address]int64{
+				fps[0].ID: 0,
+				fps[1].ID: 0,
+				fps[2].ID: 1,
+				fps[3].ID: 0,
 			}, nil
 		},
 	)
@@ -122,14 +129,14 @@ func BenchmarkSmartSelectorNext(b *testing.B) {
 
 	ss1 := NewSmartPeerSelector(
 		participants1,
-		fakeAddr(0),
-		func() (map[string]int64, error) {
+		fakeNetAddr(0),
+		func() (map[common.Address]int64, error) {
 			return flagTable1, nil
 		},
 	)
 	rnd := NewRandomPeerSelector(
 		participants2,
-		fakeAddr(0),
+		fakeNetAddr(0),
 	)
 
 	b.ResetTimer()
@@ -141,7 +148,7 @@ func BenchmarkSmartSelectorNext(b *testing.B) {
 				b.Fatal("No next peer")
 				break
 			}
-			ss1.UpdateLast(p.PubKeyHex)
+			ss1.UpdateLast(p)
 		}
 	})
 
@@ -152,7 +159,7 @@ func BenchmarkSmartSelectorNext(b *testing.B) {
 				b.Fatal("No next peer")
 				break
 			}
-			rnd.UpdateLast(p.PubKeyHex)
+			rnd.UpdateLast(p)
 		}
 	})
 
@@ -162,10 +169,10 @@ func BenchmarkSmartSelectorNext(b *testing.B) {
  * stuff
  */
 
-func fakeFlagTable(participants *peers.Peers) map[string]int64 {
-	res := make(map[string]int64, participants.Len())
-	for _, p := range participants.ToPeerSlice() {
-		res[p.PubKeyHex] = rand.Int63n(2)
+func fakeFlagTable(participants *peers.Peers) map[common.Address]int64 {
+	res := make(map[common.Address]int64, participants.Len())
+	for id := range participants.ByID {
+		res[id] = rand.Int63n(2)
 	}
 	return res
 }

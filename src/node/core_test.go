@@ -14,25 +14,25 @@ import (
 )
 
 func initCores(n int, t *testing.T) ([]*Core,
-	map[uint64]*ecdsa.PrivateKey, map[string]poset.EventHash) {
+	map[common.Address]*ecdsa.PrivateKey, map[string]poset.EventHash) {
 	cacheSize := 1000
 
 	var cores []*Core
 	index := make(map[string]poset.EventHash)
-	participantKeys := map[uint64]*ecdsa.PrivateKey{}
+	participantKeys := map[common.Address]*ecdsa.PrivateKey{}
 
 	participants := peers.NewPeers()
 	for i := 0; i < n; i++ {
 		key, _ := crypto.GenerateECDSAKey()
-		pubHex := fmt.Sprintf("0x%X",
-			crypto.FromECDSAPub(&key.PublicKey))
-		peer := peers.NewPeer(pubHex, "")
+		pubKey := crypto.FromECDSAPub(&key.PublicKey)
+		peer := peers.NewPeer(pubKey, "")
 		participants.AddPeer(peer)
 		participantKeys[peer.ID] = key
 	}
 
 	for i, peer := range participants.ToPeerSlice() {
-		core := NewCore(uint64(i),
+		core := NewCore(
+			peer.ID,
 			participantKeys[peer.ID],
 			participants,
 			poset.NewInmemStore(participants, cacheSize, nil),
@@ -75,9 +75,9 @@ e01 |   |
 e0  e1  e2
 0   1   2
 */
-func initPoset(t *testing.T, cores []*Core, keys map[uint64]*ecdsa.PrivateKey,
-	index map[string]poset.EventHash, participant uint64) {
-	for i := uint64(0); i < uint64(len(cores)); i++ {
+func initPoset(t *testing.T, cores []*Core, keys map[common.Address]*ecdsa.PrivateKey,
+	index map[string]poset.EventHash, participant int) {
+	for i := 0; i < len(cores); i++ {
 		if i != participant {
 			event, err := cores[i].GetEventBlock(index[fmt.Sprintf("e%d", i)])
 			if err != nil {
@@ -109,8 +109,7 @@ func initPoset(t *testing.T, cores []*Core, keys map[uint64]*ecdsa.PrivateKey,
 		nil,
 		poset.EventHashes{index["e0"], index["e1"]}, // e0 and e1
 		cores[0].PubKey(), 1, event01ft)
-	if err := insertEvent(cores, keys, index, event01, "e01", participant,
-		common.Hash64(cores[0].pubKey)); err != nil {
+	if err := insertEvent(cores, keys, index, event01, "e01", participant, cores[0].id); err != nil {
 		t.Fatalf("error inserting e01: %s\n", err)
 	}
 
@@ -128,7 +127,7 @@ func initPoset(t *testing.T, cores []*Core, keys map[uint64]*ecdsa.PrivateKey,
 		poset.EventHashes{index["e2"], index["e01"]}, // e2 and e01
 		cores[2].PubKey(), 1, event20ft)
 	if err := insertEvent(cores, keys, index, event20, "e20", participant,
-		common.Hash64(cores[2].pubKey)); err != nil {
+		cores[2].id); err != nil {
 		fmt.Printf("error inserting e20: %s\n", err)
 	}
 
@@ -140,16 +139,16 @@ func initPoset(t *testing.T, cores []*Core, keys map[uint64]*ecdsa.PrivateKey,
 		poset.EventHashes{index["e1"], index["e20"]}, // e1 and e20
 		cores[1].PubKey(), 1, event12ft)
 	if err := insertEvent(cores, keys, index, event12, "e12", participant,
-		common.Hash64(cores[1].pubKey)); err != nil {
+		cores[1].id); err != nil {
 		fmt.Printf("error inserting e12: %s\n", err)
 	}
 }
 
-func insertEvent(cores []*Core, keys map[uint64]*ecdsa.PrivateKey,
-	index map[string]poset.EventHash, event poset.Event, name string, participant uint64,
-	creator uint64) error {
+func insertEvent(cores []*Core, keys map[common.Address]*ecdsa.PrivateKey,
+	index map[string]poset.EventHash, event poset.Event, name string, participant int,
+	creator common.Address) error {
 
-	if participant == creator {
+	if cores[participant].id == creator {
 		if err := cores[participant].SignAndInsertSelfEvent(event); err != nil {
 			return err
 		}
@@ -165,8 +164,7 @@ func insertEvent(cores []*Core, keys map[uint64]*ecdsa.PrivateKey,
 	return nil
 }
 
-func checkHeights(
-	cores []*Core, expectedHeights []map[string]uint64, t *testing.T) {
+func checkHeights(cores []*Core, expectedHeights []map[common.Address]uint64, t *testing.T) {
 	for i, core := range cores {
 		heights := core.Heights()
 		if !reflect.DeepEqual(heights, expectedHeights[i]) {
@@ -226,21 +224,21 @@ func TestSync(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights := make([]map[string]uint64, 3)
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 1,
-		cores[1].hexID: 0,
-		cores[2].hexID: 0,
+	expectedHeights := make([]map[common.Address]uint64, 3)
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 1,
+		cores[1].id: 0,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 1,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 1,
 	}
 	checkHeights(cores, expectedHeights, t)
 
@@ -258,31 +256,31 @@ func TestSync(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 1,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 1,
 	}
 	checkHeights(cores, expectedHeights, t)
 
 	knownBy0 := cores[0].KnownEvents()
-	if k := knownBy0[common.Hash64(cores[0].pubKey)]; k != 1 {
+	if k := knownBy0[cores[0].id]; k != 1 {
 		t.Fatalf("core 0 should have last-index 1 for core 0, not %d", k)
 	}
-	if k := knownBy0[common.Hash64(cores[1].pubKey)]; k != 0 {
+	if k := knownBy0[cores[1].id]; k != 0 {
 		t.Fatalf("core 0 should have last-index 0 for core 1, not %d", k)
 	}
-	if k := knownBy0[common.Hash64(cores[2].pubKey)]; k != -1 {
+	if k := knownBy0[cores[2].id]; k != -1 {
 		t.Fatalf("core 0 should have last-index -1 for core 2, not %d", k)
 	}
 	core0Head, _ := cores[0].GetHead()
@@ -316,31 +314,31 @@ func TestSync(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 2,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 2,
 	}
 	checkHeights(cores, expectedHeights, t)
 
 	knownBy2 := cores[2].KnownEvents()
-	if k := knownBy2[common.Hash64(cores[0].pubKey)]; k != 1 {
+	if k := knownBy2[cores[0].id]; k != 1 {
 		t.Fatalf("core 2 should have last-index 1 for core 0, not %d", k)
 	}
-	if k := knownBy2[common.Hash64(cores[1].pubKey)]; k != 0 {
+	if k := knownBy2[cores[1].id]; k != 0 {
 		t.Fatalf("core 2 should have last-index 0 core 1, not %d", k)
 	}
-	if k := knownBy2[common.Hash64(cores[2].pubKey)]; k != 1 {
+	if k := knownBy2[cores[2].id]; k != 1 {
 		t.Fatalf("core 2 should have last-index 1 for core 2, not %d", k)
 	}
 	core2Head, _ := cores[2].GetHead()
@@ -372,31 +370,31 @@ func TestSync(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 2,
-		cores[2].hexID: 2,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 2,
+		cores[2].id: 2,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 2,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 2,
 	}
 	checkHeights(cores, expectedHeights, t)
 
 	knownBy1 := cores[1].KnownEvents()
-	if k := knownBy1[common.Hash64(cores[0].pubKey)]; k != 1 {
+	if k := knownBy1[cores[0].id]; k != 1 {
 		t.Fatalf("core 1 should have last-index 1 for core 0, not %d", k)
 	}
-	if k := knownBy1[common.Hash64(cores[1].pubKey)]; k != 1 {
+	if k := knownBy1[cores[1].id]; k != 1 {
 		t.Fatalf("core 1 should have last-index 1 for core 1, not %d", k)
 	}
-	if k := knownBy1[common.Hash64(cores[2].pubKey)]; k != 1 {
+	if k := knownBy1[cores[2].id]; k != 1 {
 		t.Fatalf("core 1 should have last-index 1 for core 2, not %d", k)
 	}
 	core1Head, _ := cores[1].GetHead()
@@ -410,8 +408,7 @@ func TestSync(t *testing.T) {
 
 }
 
-func checkInDegree(
-	cores []*Core, expectedInDegree []map[string]uint64, t *testing.T) {
+func checkInDegree(cores []*Core, expectedInDegree []map[common.Address]uint64, t *testing.T) {
 	for i, core := range cores {
 		inDegrees := core.InDegrees()
 		if !reflect.DeepEqual(inDegrees, expectedInDegree[i]) {
@@ -445,39 +442,39 @@ func TestInDegrees(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights := make([]map[string]uint64, 3)
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights := make([]map[common.Address]uint64, 3)
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 1,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 1,
 	}
 	checkHeights(cores, expectedHeights, t)
 
-	expectedInDegree := make([]map[string]uint64, 3)
-	expectedInDegree[0] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedInDegree := make([]map[common.Address]uint64, 3)
+	expectedInDegree[0] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedInDegree[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 0,
+	expectedInDegree[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 0,
 	}
-	expectedInDegree[2] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 0,
+	expectedInDegree[2] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 0,
 	}
 	checkInDegree(cores, expectedInDegree, t)
 
@@ -496,37 +493,37 @@ func TestInDegrees(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 2,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 2,
 	}
 	checkHeights(cores, expectedHeights, t)
 
-	expectedInDegree[0] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedInDegree[0] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedInDegree[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 0,
+	expectedInDegree[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 0,
 	}
-	expectedInDegree[2] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedInDegree[2] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
 	checkInDegree(cores, expectedInDegree, t)
 
@@ -549,37 +546,37 @@ func TestInDegrees(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 3,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 3,
 	}
 	checkHeights(cores, expectedHeights, t)
 
-	expectedInDegree[0] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedInDegree[0] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedInDegree[1] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 0,
-		cores[2].hexID: 0,
+	expectedInDegree[1] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 0,
+		cores[2].id: 0,
 	}
-	expectedInDegree[2] = map[string]uint64{
-		cores[0].hexID: 1,
-		cores[1].hexID: 2,
-		cores[2].hexID: 0,
+	expectedInDegree[2] = map[common.Address]uint64{
+		cores[0].id: 1,
+		cores[1].id: 2,
+		cores[2].id: 0,
 	}
 	checkInDegree(cores, expectedInDegree, t)
 
@@ -604,37 +601,37 @@ func TestInDegrees(t *testing.T) {
 	   0   1   2        0   1   2       0   1   2
 	*/
 
-	expectedHeights[0] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedHeights[0] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedHeights[1] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 2,
-		cores[2].hexID: 3,
+	expectedHeights[1] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 2,
+		cores[2].id: 3,
 	}
-	expectedHeights[2] = map[string]uint64{
-		cores[0].hexID: 2,
-		cores[1].hexID: 1,
-		cores[2].hexID: 3,
+	expectedHeights[2] = map[common.Address]uint64{
+		cores[0].id: 2,
+		cores[1].id: 1,
+		cores[2].id: 3,
 	}
 	checkHeights(cores, expectedHeights, t)
 
-	expectedInDegree[0] = map[string]uint64{
-		cores[0].hexID: 0,
-		cores[1].hexID: 1,
-		cores[2].hexID: 0,
+	expectedInDegree[0] = map[common.Address]uint64{
+		cores[0].id: 0,
+		cores[1].id: 1,
+		cores[2].id: 0,
 	}
-	expectedInDegree[1] = map[string]uint64{
-		cores[0].hexID: 1,
-		cores[1].hexID: 0,
-		cores[2].hexID: 1,
+	expectedInDegree[1] = map[common.Address]uint64{
+		cores[0].id: 1,
+		cores[1].id: 0,
+		cores[2].id: 1,
 	}
-	expectedInDegree[2] = map[string]uint64{
-		cores[0].hexID: 1,
-		cores[1].hexID: 2,
-		cores[2].hexID: 0,
+	expectedInDegree[2] = map[common.Address]uint64{
+		cores[0].id: 1,
+		cores[1].id: 2,
+		cores[2].id: 0,
 	}
 	checkInDegree(cores, expectedInDegree, t)
 }
@@ -744,10 +741,10 @@ func TestOverSyncLimit(t *testing.T) {
 	cores := initConsensusPoset(t)
 
 	// positive
-	known := map[uint64]int64{
-		common.Hash64(cores[0].pubKey): 1,
-		common.Hash64(cores[1].pubKey): 1,
-		common.Hash64(cores[2].pubKey): 1,
+	known := map[common.Address]int64{
+		cores[0].id: 1,
+		cores[1].id: 1,
+		cores[2].id: 1,
 	}
 
 	syncLimit := int64(10)
@@ -757,10 +754,10 @@ func TestOverSyncLimit(t *testing.T) {
 	}
 
 	// negative
-	known = map[uint64]int64{
-		common.Hash64(cores[0].pubKey): 6,
-		common.Hash64(cores[1].pubKey): 6,
-		common.Hash64(cores[2].pubKey): 6,
+	known = map[common.Address]int64{
+		cores[0].id: 6,
+		cores[1].id: 6,
+		cores[2].id: 6,
 	}
 
 	if cores[0].OverSyncLimit(known, syncLimit) {
@@ -768,10 +765,10 @@ func TestOverSyncLimit(t *testing.T) {
 	}
 
 	// edge
-	known = map[uint64]int64{
-		common.Hash64(cores[0].pubKey): 2,
-		common.Hash64(cores[1].pubKey): 3,
-		common.Hash64(cores[2].pubKey): 3,
+	known = map[common.Address]int64{
+		cores[0].id: 2,
+		cores[1].id: 3,
+		cores[2].id: 3,
 	}
 	if cores[0].OverSyncLimit(known, syncLimit) {
 		t.Fatalf("OverSyncLimit(%v, %v) should return false", known, syncLimit)
@@ -923,7 +920,7 @@ func TestCoreFastForward(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = cores[0].FastForward(cores[1].hexID, block, frame)
+		err = cores[0].FastForward(cores[1].id, block, frame)
 		// We should get an error because AnchorBlock doesnt contain enough
 		// signatures
 		if err == nil {
@@ -950,7 +947,7 @@ func TestCoreFastForward(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = cores[0].FastForward(cores[1].hexID, block, frame)
+		err = cores[0].FastForward(cores[1].id, block, frame)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -960,16 +957,15 @@ func TestCoreFastForward(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectedKnown := map[uint64]int64{
-			common.Hash64(cores[0].pubKey): -1,
-			common.Hash64(cores[1].pubKey): 0,
-			common.Hash64(cores[2].pubKey): 1,
-			common.Hash64(cores[3].pubKey): 0,
+		expectedKnown := map[common.Address]int64{
+			cores[0].id: -1,
+			cores[1].id: 0,
+			cores[2].id: 1,
+			cores[3].id: 0,
 		}
 
 		if !reflect.DeepEqual(knownBy0, expectedKnown) {
-			t.Fatalf("Cores[0].Known should be %v, not %v",
-				expectedKnown, knownBy0)
+			t.Fatalf("Cores[0].Known should be %v, not %v", expectedKnown, knownBy0)
 		}
 
 		if r := cores[0].GetLastConsensusRound(); r < 0 || r != 1 {
@@ -992,8 +988,7 @@ func TestCoreFastForward(t *testing.T) {
 			t.Fatalf("Blocks defer")
 		}
 
-		lastEventFrom0, _, err := cores[0].poset.Store.LastEventFrom(
-			cores[0].hexID)
+		lastEventFrom0, _, err := cores[0].poset.Store.LastEventFrom(cores[0].id)
 		if err != nil {
 			t.Fatal(err)
 		}

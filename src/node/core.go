@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/log"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
@@ -29,13 +30,12 @@ var (
 
 // Core struct that controls the consensus, transaction, and communication
 type Core struct {
-	id     uint64
+	id     common.Address
 	key    *ecdsa.PrivateKey
 	pubKey []byte
-	hexID  string
 	poset  *poset.Poset
 
-	inDegrees map[string]uint64
+	inDegrees map[common.Address]uint64
 
 	participants *peers.Peers // [PubKey] => id
 	head         poset.EventHash
@@ -54,7 +54,7 @@ type Core struct {
 }
 
 // NewCore creates a new core struct
-func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
+func NewCore(id common.Address, key *ecdsa.PrivateKey, participants *peers.Peers,
 	store poset.Store, commitCh chan poset.Block, logger *logrus.Logger) *Core {
 
 	if logger == nil {
@@ -64,9 +64,9 @@ func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
 	}
 	logEntry := logger.WithField("id", id)
 
-	inDegrees := make(map[string]uint64)
-	for pubKey := range participants.ByPubKey {
-		inDegrees[pubKey] = 0
+	inDegrees := make(map[common.Address]uint64)
+	for pid := range participants.ByID {
+		inDegrees[pid] = 0
 	}
 
 	p2 := poset.NewPoset(participants, store, commitCh, logEntry)
@@ -90,7 +90,7 @@ func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
 }
 
 // ID returns the ID of this core
-func (c *Core) ID() uint64 {
+func (c *Core) ID() common.Address {
 	return c.id
 }
 
@@ -102,36 +102,27 @@ func (c *Core) PubKey() []byte {
 	return c.pubKey
 }
 
-// HexID returns the Hex representation of the public key
-func (c *Core) HexID() string {
-	if c.hexID == "" {
-		pubKey := c.PubKey()
-		c.hexID = fmt.Sprintf("0x%X", pubKey)
-	}
-	return c.hexID
-}
-
 // Head returns the current chain head for this core
 func (c *Core) Head() poset.EventHash {
 	return c.head
 }
 
 // Heights returns map with heights for each participants
-func (c *Core) Heights() map[string]uint64 {
-	heights := make(map[string]uint64)
-	for pubKey := range c.participants.ByPubKey {
-		participantEvents, err := c.poset.Store.ParticipantEvents(pubKey, -1)
+func (c *Core) Heights() map[common.Address]uint64 {
+	heights := make(map[common.Address]uint64)
+	for id := range c.participants.ByID {
+		participantEvents, err := c.poset.Store.ParticipantEvents(id, -1)
 		if err == nil {
-			heights[pubKey] = uint64(len(participantEvents))
+			heights[id] = uint64(len(participantEvents))
 		} else {
-			heights[pubKey] = 0
+			heights[id] = 0
 		}
 	}
 	return heights
 }
 
 // InDegrees returns all vertexes from other nodes that reference this top event block
-func (c *Core) InDegrees() map[string]uint64 {
+func (c *Core) InDegrees() map[common.Address]uint64 {
 	return c.inDegrees
 }
 
@@ -141,13 +132,13 @@ func (c *Core) SetHeadAndSeq() error {
 	var head poset.EventHash
 	var seq int64
 
-	last, isRoot, err := c.poset.Store.LastEventFrom(c.HexID())
+	last, isRoot, err := c.poset.Store.LastEventFrom(c.ID())
 	if err != nil {
 		return err
 	}
 
 	if isRoot {
-		root, err := c.poset.Store.GetRoot(c.HexID())
+		root, err := c.poset.Store.GetRoot(c.ID())
 		if err != nil {
 			return err
 		}
@@ -184,17 +175,17 @@ func (c *Core) Bootstrap() error {
 }
 
 func (c *Core) bootstrapInDegrees() {
-	for pubKey := range c.participants.ByPubKey {
-		c.inDegrees[pubKey] = 0
-		eventHash, _, err := c.poset.Store.LastEventFrom(pubKey)
+	for id := range c.participants.ByID {
+		c.inDegrees[id] = 0
+		eventHash, _, err := c.poset.Store.LastEventFrom(id)
 		if err != nil {
 			continue
 		}
-		for otherPubKey := range c.participants.ByPubKey {
-			if otherPubKey == pubKey {
+		for otherID := range c.participants.ByID {
+			if otherID == id {
 				continue
 			}
-			events, err := c.poset.Store.ParticipantEvents(otherPubKey, -1)
+			events, err := c.poset.Store.ParticipantEvents(otherID, -1)
 			if err != nil {
 				continue
 			}
@@ -204,7 +195,7 @@ func (c *Core) bootstrapInDegrees() {
 					continue
 				}
 				if event.OtherParent() == eventHash {
-					c.inDegrees[pubKey]++
+					c.inDegrees[id]++
 				}
 			}
 		}
@@ -227,7 +218,7 @@ func (c *Core) InsertEvent(event poset.Event, setWireInfo bool) error {
 
 	c.logger.WithFields(logrus.Fields{
 		"event":      event,
-		"creator":    event.GetCreator(),
+		"creator":    event.CreatorAddress(),
 		"selfParent": event.SelfParent(),
 		"index":      event.Index(),
 		"hex":        event.Hash(),
@@ -237,21 +228,21 @@ func (c *Core) InsertEvent(event poset.Event, setWireInfo bool) error {
 		return err
 	}
 
-	if event.GetCreator() == c.HexID() {
+	if event.CreatorAddress() == c.ID() {
 		c.head = event.Hash()
 		c.Seq = event.Index()
 	}
 
-	c.inDegrees[event.GetCreator()] = 0
+	c.inDegrees[event.CreatorAddress()] = 0
 
 	if otherEvent, err := c.poset.Store.GetEventBlock(event.OtherParent()); err == nil {
-		c.inDegrees[otherEvent.GetCreator()]++
+		c.inDegrees[otherEvent.CreatorAddress()]++
 	}
 	return nil
 }
 
 // KnownEvents returns all known event blocks
-func (c *Core) KnownEvents() map[uint64]int64 {
+func (c *Core) KnownEvents() map[common.Address]int64 {
 	return c.poset.Store.KnownEvents()
 }
 
@@ -272,7 +263,7 @@ func (c *Core) SignBlock(block poset.Block) (poset.BlockSignature, error) {
 // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 // OverSyncLimit checks if the unknown events is over the sync limit and if the node should catch up
-func (c *Core) OverSyncLimit(knownEvents map[uint64]int64, syncLimit int64) bool {
+func (c *Core) OverSyncLimit(knownEvents map[common.Address]int64, syncLimit int64) bool {
 	totUnknown := int64(0)
 	myKnownEvents := c.KnownEvents()
 	for i, li := range myKnownEvents {
@@ -289,7 +280,7 @@ func (c *Core) GetAnchorBlockWithFrame() (poset.Block, poset.Frame, error) {
 }
 
 // EventDiff returns events that c knows about and are not in 'known'
-func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err error) {
+func (c *Core) EventDiff(known map[common.Address]int64) (events []poset.Event, err error) {
 	var unknown []poset.Event
 	// known represents the index of the last event known for every participant
 	// compare this to our view of events and fill unknown with events that we know of
@@ -302,7 +293,7 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 			continue
 		}
 		// get participant Events with index > ct
-		participantEvents, err := c.poset.Store.ParticipantEvents(peer.PubKeyHex, ct)
+		participantEvents, err := c.poset.Store.ParticipantEvents(peer.ID, ct)
 		if err != nil {
 			return []poset.Event{}, err
 		}
@@ -313,7 +304,7 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 			}
 			c.logger.WithFields(logrus.Fields{
 				"event":      ev,
-				"creator":    ev.GetCreator(),
+				"creator":    ev.CreatorAddress(),
 				"selfParent": ev.SelfParent(),
 				"index":      ev.Index(),
 				"hex":        ev.Hash(),
@@ -350,7 +341,7 @@ func (c *Core) Sync(unknownEvents []poset.WireEvent) error {
 			return err
 
 		}
-		if ev.Index() > myKnownEvents[ev.CreatorID()] {
+		if ev.Index() > myKnownEvents[ev.CreatorAddress()] {
 			ev.SetLamportTimestamp(poset.LamportTimestampNIL)
 			ev.SetRound(poset.RoundNIL)
 			ev.SetRoundReceived(poset.RoundNIL)
@@ -378,7 +369,7 @@ func (c *Core) Sync(unknownEvents []poset.WireEvent) error {
 }
 
 // FastForward catch up to another peer if too far behind
-func (c *Core) FastForward(peer string, block poset.Block, frame poset.Frame) error {
+func (c *Core) FastForward(peer common.Address, block poset.Block, frame poset.Frame) error {
 
 	// Check Block Signatures
 	err := c.poset.CheckBlock(block)
