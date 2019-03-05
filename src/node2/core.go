@@ -20,6 +20,11 @@ const (
 	MaxEventsPayloadSize = 100 * 1024 * 1024
 )
 
+var (
+	// ErrTooBigTx is returned when transaction size > MaxEventsPayloadSize
+	ErrTooBigTx = fmt.Errorf("transaction too big")
+)
+
 // Core struct that controls the consensus, transaction, and communication
 type Core struct {
 	id     uint64
@@ -257,6 +262,11 @@ func (c *Core) GetBlockSignaturePoolCount() int64 {
 	return int64(len(c.blockSignaturePool))
 }
 
+// GetHead get the current latest event block head
+func (c *Core) GetHead() (poset.Event, error) {
+	return c.poset.Store.GetEventBlock(c.head)
+}
+
 // AddIntoPoset add unknown events into our poset
 func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]poset.WireEvent) error {
 
@@ -422,4 +432,28 @@ func (c *Core) SignAndInsertSelfEvent(event poset.Event) error {
 	}
 
 	return c.InsertEvent(event, true)
+}
+
+// AddTransactions add transactions to the pending pool
+func (c *Core) AddTransactions(txs [][]byte) error {
+	for _, tx := range txs {
+		if len(tx) > MaxEventsPayloadSize {
+			return ErrTooBigTx
+		}
+	}
+
+	c.transactionPoolLocker.Lock()
+	defer c.transactionPoolLocker.Unlock()
+	
+	c.transactionPool = append(c.transactionPool, txs...)
+	
+	return nil
+}
+
+// AddInternalTransactions add internal transactions to the pending pool
+func (c *Core) AddInternalTransactions(txs []poset.InternalTransaction) {
+	c.internalTransactionPoolLocker.Lock()
+	defer c.internalTransactionPoolLocker.Unlock()
+	
+	c.internalTransactionPool = append(c.internalTransactionPool, txs...)
 }

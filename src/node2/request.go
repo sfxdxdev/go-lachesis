@@ -3,10 +3,79 @@ package node2
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Fantom-foundation/go-lachesis/src/peer"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
+
+func (n *Node) txHandler() {
+	for {
+		select {
+		case tx := <-n.submitCh:
+			err := n.core.AddTransactions([][]byte{tx})
+			if err != nil {
+				n.logger.Errorf("Adding Transactions to Transaction Pool: %s", err)
+			}
+
+			n.resetTimer()
+		case tx := <-n.submitInternalCh:
+			n.core.AddInternalTransactions([]poset.InternalTransaction{tx})
+			n.resetTimer()
+		}
+	}
+}
+
+func (n *Node) requestHandler() {
+	for {
+		select {
+		case rpc, ok := <-n.trans.ReceiverChannel():
+			if !ok {
+				return
+			}
+
+			n.goFunc(func() {
+				n.rpcJobs.increment()
+				n.processRequest(rpc)
+				n.resetTimer()
+				n.rpcJobs.decrement()
+			})
+		case <-n.controlTimer.tickCh:
+			if n.gossipJobs.get() < 1 {
+				n.goFunc(func() {
+					n.gossipJobs.increment()
+					
+					participants := n.core.participants.ToPeerSlice()
+
+					for i := 0; i < len(participants); i++ {
+						go n.gossip(participants[i])
+					}
+					
+					n.gossipJobs.decrement()
+				})
+			}
+			
+			n.resetTimer()
+		case <-n.shutdownCh:
+			return
+		}
+	}
+}
+
+func (n *Node) resetTimer() {
+	if !n.controlTimer.GetSet() {
+		ts := n.conf.HeartbeatTimeout
+
+		// Slow gossip if nothing interesting to say
+		if n.core.poset.GetPendingLoadedEvents() == 0 &&
+			n.core.GetTransactionPoolCount() == 0 &&
+			n.core.GetBlockSignaturePoolCount() == 0 {
+			ts = time.Duration(time.Second)
+		}
+
+		n.controlTimer.resetCh <- ts
+	}
+}
 
 func (n *Node) processRequest(rpc *peer.RPC) {
 	switch cmd := rpc.Command.(type) {
