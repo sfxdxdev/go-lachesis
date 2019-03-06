@@ -208,11 +208,13 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 		if err != nil {
 			return []poset.Event{}, err
 		}
+
 		for _, e := range participantEvents {
 			ev, err := c.poset.Store.GetEventBlock(e)
 			if err != nil {
 				return []poset.Event{}, err
 			}
+
 			c.logger.WithFields(logrus.Fields{
 				"event":            ev,
 				"creator":          ev.GetCreator(),

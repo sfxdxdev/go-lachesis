@@ -44,13 +44,15 @@ func (n *Node) requestHandler() {
 			if n.gossipJobs.get() < 1 {
 				n.goFunc(func() {
 					n.gossipJobs.increment()
-					
-					participants := n.core.participants.ToPeerSlice()
 
-					for i := 0; i < len(participants); i++ {
-						go n.gossip(participants[i])
+					if !n.testMode {
+						participants := n.core.participants.ToPeerSlice()
+
+						for i := 0; i < len(participants); i++ {
+							go n.gossip(participants[i])
+						}
 					}
-					
+
 					n.gossipJobs.decrement()
 				})
 			}

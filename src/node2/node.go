@@ -45,6 +45,8 @@ type Node struct {
 	needBoostrap bool
 	gossipJobs   count64
 	rpcJobs      count64
+
+	testMode     bool
 }
 
 // NewNode create a new node struct
@@ -79,6 +81,7 @@ func NewNode(conf *Config,
 		rpcJobs:          0,
 		nodeState:        newNodeState(),
 		signalTERMch:     make(chan os.Signal, 1),
+		testMode:         false,
 	}
 
 	signal.Notify(node.signalTERMch, syscall.SIGTERM, os.Kill)
@@ -172,15 +175,11 @@ func (n *Node) ID() uint64 {
 ////// SYNC //////
 
 func (n *Node) gossip(peer *peers.Peer) error {
+	
 	// Get data from peer
 	events, heights, err := n.getUnknownEventsFromPeer(peer)
 	if err != nil {
 		return err
-	}
-
-	// If we don't have any new events from peer -> return without error.
-	if len(*events) == 0 {
-		return nil
 	}
 
 	// Add data into poset & run consensus

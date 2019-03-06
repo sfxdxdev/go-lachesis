@@ -114,12 +114,14 @@ func transportClose(t *testing.T, syncPeer peer.SyncPeer) {
 
 func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
-	trans peer.SyncPeer, localAddr string, run bool) *Node {
+	trans peer.SyncPeer, localAddr string, testMode bool) *Node {
 
 	db := poset.NewInmemStore(participants, config.CacheSize, nil)
 	app := dummy.NewInmemDummyApp(logger)
 
 	node := NewNode(config, id, key, participants, db, trans, app, localAddr)
+	node.testMode = testMode
+
 	if err := node.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +259,7 @@ func TestCreateAndInitNode(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
 
 	// Check status
 	nodeState := node.getState()
@@ -295,7 +297,7 @@ func TestAddTransaction(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
 	defer node.Shutdown()
 
 	// Add new Tx
@@ -332,7 +334,7 @@ func TestTxHandler(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
 	defer node.Shutdown()
 
 	// Check submitCh case
@@ -360,8 +362,7 @@ func TestTxHandler(t *testing.T) {
 	}
 }
 
-// TODO: Perhaps incorrect test
-func TestSyncAndRequestSync(t *testing.T) {
+func TestSyncProcess(t *testing.T) {
 	// Init data
 	data := InitTestData(t, 2, 2)
 
@@ -375,29 +376,57 @@ func TestSyncAndRequestSync(t *testing.T) {
 	defer transportClose(t, trans2)
 
 	// Create & Init node
-	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
+	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], true)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
+	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], true)
 	defer node2.Shutdown()
 
-	// Submit transaction for node
+	// Submit transaction for node2
 	message := "Test"
-	node1.submitCh <- []byte(message)
+	node2.submitCh <- []byte(message)
 
-	// Sync request
-	events, _, err := node1.getUnknownEventsFromPeer(data.PeersSlice[1])
+	// Get data from node1
+	events, heights, err := node2.getUnknownEventsFromPeer(data.PeersSlice[0])
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf(err.Error())
 	}
 
-	// Sync events
-	if err := node1.addIntoPoset(data.PeersSlice[1], events); err != nil {
-		t.Fatal(err)
+	if l := len(*events); l != 0 {
+		t.Fatalf("expected %d, got %d", 0, l)
 	}
 
-	// Check pool
+	// Add data into poset (Create new event with tx)
+	err = node2.addIntoPoset(data.PeersSlice[0], events)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// Collect data for node1 from node2
+	events, err = node2.collectUnknownEventsForPeer(data.PeersSlice[0], heights)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	if l := len(*events); l != 1 {
+		t.Fatalf("expected %d, got %d", 1, l)
+	}
+
+	// Send data from node2 to node1
+	_, err = node2.requestWithEvents(data.PeersSlice[0].NetAddr, *events)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// We need to wait while node1 accept & process new request.
+	time.Sleep(3 * time.Second)
+
+	// Check tx pool for node1 & node2
 	if l := len(node1.core.transactionPool); l > 0 {
+		t.Fatalf("expected %d, got %d", 0, l)
+	}
+
+	if l := len(node2.core.transactionPool); l > 0 {
 		t.Fatalf("expected %d, got %d", 0, l)
 	}
 
@@ -407,12 +436,22 @@ func TestSyncAndRequestSync(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if l := len(node1Head.Transactions()); l != 1 {
+	if l := len(node1Head.Transactions()); l == 1 {
+		t.Fatalf("expected %d, got %d", 0, l)
+	}
+	
+	// Get head & check tx count
+	node2Head, err := node2.core.GetHead()
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	if l := len(node2Head.Transactions()); l != 1 {
 		t.Fatalf("expected %d, got %d", 1, l)
 	}
 
 	// Check message
-	if m := string(node1Head.Transactions()[0]); m != message {
+	if m := string(node2Head.Transactions()[0]); m != message {
 		t.Fatalf("expected message %s, got %s", message, m)
 	}
 }
