@@ -50,7 +50,7 @@ type Core struct {
 
 // NewCore creates a new core struct
 func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
-	store poset.Store, commitCh chan poset.Block, logger *logrus.Logger) *Core {
+	pst *poset.Poset, logger *logrus.Logger) *Core {
 
 	if logger == nil {
 		logger = logrus.New()
@@ -59,12 +59,10 @@ func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
 	}
 	logEntry := logger.WithField("id", id)
 
-	p2 := poset.NewPoset(participants, store, commitCh, logEntry)
-
 	core := &Core{
 		id:                      id,
 		key:                     key,
-		poset:                   p2,
+		poset:                   pst,
 		participants:            participants,
 		transactionPool:         [][]byte{},
 		internalTransactionPool: []poset.InternalTransaction{},
@@ -73,7 +71,7 @@ func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
 		head:                    poset.EventHash{},
 	}
 
-	p2.SetCore(core)
+	pst.SetCore(core)
 
 	return core
 }

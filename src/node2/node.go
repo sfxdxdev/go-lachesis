@@ -15,10 +15,18 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 	"github.com/Fantom-foundation/go-lachesis/src/proxy"
+	"github.com/Fantom-foundation/go-lachesis/src/service"
 )
+
+// Stats used for logStats.
+type Stats interface {
+	Stats() map[string]string
+	LastRound() int64
+}
 
 type Node struct {
 	*nodeState
+	stats Stats
 
 	conf   *Config
 	logger *logrus.Entry
@@ -42,9 +50,9 @@ type Node struct {
 	syncRequests int
 	syncErrors   int
 
-	needBoostrap bool
-	gossipJobs   count64
-	rpcJobs      count64
+	needBootstrap bool
+	gossipJobs    count64
+	rpcJobs       count64
 
 	testMode     bool
 }
@@ -54,13 +62,14 @@ func NewNode(conf *Config,
 	id uint64,
 	key *ecdsa.PrivateKey,
 	participants *peers.Peers,
-	store poset.Store,
+	pst *poset.Poset,
+	commitCh chan poset.Block,
+	needBootstrap bool,
 	trans peer.SyncPeer,
 	proxy proxy.AppProxy,
 	localAddr string) *Node {
 
-	commitCh := make(chan poset.Block, 400)
-	core := NewCore(id, key, participants, store, commitCh, conf.Logger)
+	core := NewCore(id, key, participants, pst, conf.Logger)
 
 	pubKey := core.HexID()
 
@@ -84,12 +93,15 @@ func NewNode(conf *Config,
 		testMode:         false,
 	}
 
+	stats := service.NewStats(pst.Store, pst, &node)
+	node.stats = stats
+
 	signal.Notify(node.signalTERMch, syscall.SIGTERM, os.Kill)
 
 	node.logger.WithField("participants", participants).Debug("participants")
 	node.logger.WithField("pubKey", pubKey).Debug("pubKey")
 
-	node.needBoostrap = store.NeedBootstrap()
+	node.needBootstrap = needBootstrap
 
 	// Initialize
 	node.setState(Gossiping)
@@ -99,7 +111,7 @@ func NewNode(conf *Config,
 
 // Init initializes all the node processes
 func (n *Node) Init() error {
-	if n.needBoostrap {
+	if n.needBootstrap {
 		n.logger.Debug("Bootstrap")
 		if err := n.core.Bootstrap(); err != nil {
 			return err
@@ -107,6 +119,19 @@ func (n *Node) Init() error {
 	}
 
 	return n.core.SetHeadAndHeight()
+}
+
+// CommitCh return channel to write commit messages.
+// Maybe better way to call n.commit in poset
+// through node interface ???
+func (n *Node) CommitCh() chan<- poset.Block {
+	return n.commitCh
+}
+
+// SubmitCh func for test
+func (n *Node) SubmitCh(tx []byte) error {
+	n.proxy.SubmitCh() <- []byte(tx)
+	return nil
 }
 
 // Run core run loop, takes care of all processes
@@ -170,6 +195,45 @@ func (n *Node) Shutdown() {
 // ID shows the ID of the node
 func (n *Node) ID() uint64 {
 	return n.id
+}
+
+// GetTransactionPoolCount returns the count of all pending transactions
+func (n *Node) GetTransactionPoolCount() int64 {
+	return n.core.GetTransactionPoolCount()
+}
+
+// HeartbeatTimeout returns heartbeat timeout.
+func (n *Node) HeartbeatTimeout() time.Duration {
+	return n.conf.HeartbeatTimeout
+}
+
+// KnownEvents return known events.
+func (n *Node) KnownEvents() map[uint64]int64 {
+	return n.core.GetKnownHeights()
+}
+
+// StartTime returns node start time.
+func (n *Node) StartTime() time.Time {
+	return n.start
+}
+
+// State returns current state.
+func (n *Node) State() string {
+	return n.state.String()
+}
+
+// SyncLimit returns sync limit from config.
+func (n *Node) SyncLimit() int64 {
+	return n.conf.SyncLimit
+}
+
+// SyncRate returns the current synchronization (talking to over nodes) rate in ms
+func (n *Node) SyncRate() float64 {
+	var syncErrorRate float64
+	if n.syncRequests != 0 {
+		syncErrorRate = float64(n.syncErrors) / float64(n.syncRequests)
+	}
+	return 1 - syncErrorRate
 }
 
 ////// SYNC //////

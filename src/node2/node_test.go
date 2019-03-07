@@ -13,6 +13,7 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/dummy"
+	"github.com/Fantom-foundation/go-lachesis/src/log"
 	"github.com/Fantom-foundation/go-lachesis/src/peer"
 	"github.com/Fantom-foundation/go-lachesis/src/peer/fakenet"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
@@ -119,7 +120,17 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	db := poset.NewInmemStore(participants, config.CacheSize, nil)
 	app := dummy.NewInmemDummyApp(logger)
 
-	node := NewNode(config, id, key, participants, db, trans, app, localAddr)
+	if logger == nil {
+		logger = logrus.New()
+		logger.Level = logrus.DebugLevel
+		lachesis_log.NewLocal(logger, logger.Level.String())
+	}
+	logEntry := logger.WithField("id", id)
+
+	commitCh := make(chan poset.Block, 400)
+	pst := poset.NewPoset(participants, db, commitCh, logEntry)
+
+	node := NewNode(config, id, key, participants, pst, commitCh, db.NeedBootstrap(), trans, app, localAddr)
 	node.testMode = testMode
 
 	if err := node.Init(); err != nil {
@@ -131,8 +142,7 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	return node
 }
 
-func gossip(
-	nodes []*Node, target int64, shutdown bool, timeout time.Duration) error {
+func gossip(nodes []*Node, target int64, shutdown bool, timeout time.Duration) error {
 	for _, n := range nodes {
 		node := n
 		go func() {
