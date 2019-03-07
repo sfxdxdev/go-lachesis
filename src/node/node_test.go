@@ -17,6 +17,7 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/common/hexutil"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/dummy"
+	"github.com/Fantom-foundation/go-lachesis/src/log"
 	"github.com/Fantom-foundation/go-lachesis/src/peer"
 	"github.com/Fantom-foundation/go-lachesis/src/peer/fakenet"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
@@ -116,37 +117,45 @@ func transportClose(t *testing.T, syncPeer peer.SyncPeer) {
 	}
 }
 
-func createNode(t *testing.T, logger *logrus.Logger, config *Config,
+func createNode(t *testing.T, logger *logrus.Logger, db poset.Store, config *Config,
 	id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
-	trans peer.SyncPeer, localAddr string, run bool) *Node {
+	trans peer.SyncPeer, localAddr string, run bool) (*Node, *poset.Poset) {
 
-	db := poset.NewInmemStore(participants, config.CacheSize, nil)
 	app := dummy.NewInmemDummyApp(logger)
 
 	selectorArgs := SmartPeerSelectorCreationFnArgs{
-		LocalAddr: localAddr,
+		LocalAddr:    localAddr,
 		GetFlagTable: nil,
 	}
 
-	node := NewNode(config, id, key, participants, db, trans, app, NewSmartPeerSelectorWrapper, selectorArgs, localAddr)
+	if logger == nil {
+		logger = logrus.New()
+		logger.Level = logrus.DebugLevel
+		lachesis_log.NewLocal(logger, logger.Level.String())
+	}
+	logEntry := logger.WithField("id", id)
+
+	commitCh := make(chan poset.Block, 400)
+	pst := poset.NewPoset(participants, db, commitCh, logEntry)
+
+	node := NewNode(config, id, key, participants, pst, commitCh, db.NeedBootstrap(), trans, app, NewSmartPeerSelectorWrapper, selectorArgs, localAddr)
 	if err := node.Init(); err != nil {
 		t.Fatal(err)
 	}
 
 	go node.Run(run)
 
-	return node
+	return node, pst
 }
 
-func gossip(
-	nodes []*Node, target int64, shutdown bool, timeout time.Duration) error {
+func gossip(nodes []*Node, posets []*poset.Poset, target int64, shutdown bool, timeout time.Duration) error {
 	for _, n := range nodes {
 		node := n
 		go func() {
 			node.Run(true)
 		}()
 	}
-	err := bombardAndWait(nodes, target, timeout)
+	err := bombardAndWait(nodes, posets, target, timeout)
 	if err != nil {
 		return err
 	}
@@ -158,7 +167,7 @@ func gossip(
 	return nil
 }
 
-func bombardAndWait(nodes []*Node, target int64, timeout time.Duration) error {
+func bombardAndWait(nodes []*Node, posets []*poset.Poset, target int64, timeout time.Duration) error {
 
 	quit := make(chan struct{})
 	go func() {
@@ -191,7 +200,7 @@ func bombardAndWait(nodes []*Node, target int64, timeout time.Duration) error {
 		}
 		time.Sleep(10 * time.Millisecond)
 		done := true
-		for _, n := range nodes {
+		for i, n := range nodes {
 			ce := n.GetLastBlockIndex()
 			if ce < target {
 				done = false
@@ -200,7 +209,7 @@ func bombardAndWait(nodes []*Node, target int64, timeout time.Duration) error {
 			} else {
 				// wait until the target block has retrieved a state hash from
 				// the app
-				targetBlock, _ := n.GetBlock(target)
+				targetBlock, _ := posets[i].Store.GetBlock(target)
 				if len(targetBlock.GetStateHash()) == 0 {
 					done = false
 					tag = "stateHash==0"
@@ -261,12 +270,22 @@ func recycleNode(oldNode *Node, logger *logrus.Logger, t *testing.T) *Node {
 	prox := dummy.NewInmemDummyApp(logger)
 
 	selectorArgs := SmartPeerSelectorCreationFnArgs{
-		LocalAddr: p[0].NetAddr,
+		LocalAddr:    p[0].NetAddr,
 		GetFlagTable: nil,
 	}
 
+	if logger == nil {
+		logger = logrus.New()
+		logger.Level = logrus.DebugLevel
+		lachesis_log.NewLocal(logger, logger.Level.String())
+	}
+	logEntry := logger.WithField("id", id)
+
+	commitCh := make(chan poset.Block, 400)
+	pst := poset.NewPoset(ps, store, commitCh, logEntry)
+
 	// Create & Init node
-	newNode := NewNode(conf, id, key, ps, store, trans, prox, NewSmartPeerSelectorWrapper, selectorArgs, p[0].NetAddr)
+	newNode := NewNode(conf, id, key, ps, pst, commitCh, store.NeedBootstrap(), trans, prox, NewSmartPeerSelectorWrapper, selectorArgs, p[0].NetAddr)
 	if err := newNode.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +338,8 @@ func TestCreateAndInitNode(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	store := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node, _ := createNode(t, data.Logger, store, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
 
 	// Check status
 	nodeState := node.getState()
@@ -357,7 +377,8 @@ func TestAddTransaction(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	store := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node, _ := createNode(t, data.Logger, store, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
 	defer node.Shutdown()
 
 	// Add new Tx
@@ -394,7 +415,8 @@ func TestCommit(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	store := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node, _ := createNode(t, data.Logger, store, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
 	defer node.Shutdown()
 
 	// Create block
@@ -412,7 +434,7 @@ func TestCommit(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	testBlock, err := node.GetBlock(0)
+	testBlock, err := store.GetBlock(0)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -435,7 +457,8 @@ func TestDoBackgroundWork(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
+	store := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node, _ := createNode(t, data.Logger, store, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], false)
 	defer node.Shutdown()
 
 	// Check submitCh case
@@ -475,7 +498,7 @@ func TestDoBackgroundWork(t *testing.T) {
 	// Because of we need to wait to complete commit.
 	time.Sleep(3 * time.Second)
 
-	testBlock, err := node.GetBlock(0)
+	testBlock, err := store.GetBlock(0)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -512,10 +535,12 @@ func TestSyncAndRequestSync(t *testing.T) {
 	defer transportClose(t, trans2)
 
 	// Create & Init node
-	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
+	store1 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node1, _ := createNode(t, data.Logger, store1, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
+	store2 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node2, _ := createNode(t, data.Logger, store2, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
 	defer node2.Shutdown()
 
 	// Submit transaction for node
@@ -571,10 +596,12 @@ func TestRequestEagerSyncAndEventDiff(t *testing.T) {
 	defer transportClose(t, trans2)
 
 	// Create & Init node
-	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
+	store1 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node1, _ := createNode(t, data.Logger, store1, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
+	store2 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node2, _ := createNode(t, data.Logger, store2, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
 	defer node2.Shutdown()
 
 	// Get known events
@@ -626,10 +653,12 @@ func TestRequestFastForward(t *testing.T) {
 	defer transportClose(t, trans2)
 
 	// Create & Init node
-	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
+	store1 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node1, _ := createNode(t, data.Logger, store1, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
+	store2 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node2, _ := createNode(t, data.Logger, store2, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
 	defer node2.Shutdown()
 
 	// Create frame
@@ -758,22 +787,27 @@ func TestFastForward(t *testing.T) {
 	defer transportClose(t, trans4)
 
 	// Create & Init node
-	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
+	store1 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node1, pst1 := createNode(t, data.Logger, store1, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
+	store2 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node2, pst2 := createNode(t, data.Logger, store2, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], false)
 	defer node2.Shutdown()
 
-	node3 := createNode(t, data.Logger, data.Config, data.PeersSlice[2].ID, data.Keys[2], data.Peers, trans3, data.Adds[2], false)
+	store3 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node3, pst3 := createNode(t, data.Logger, store3, data.Config, data.PeersSlice[2].ID, data.Keys[2], data.Peers, trans3, data.Adds[2], false)
 	defer node3.Shutdown()
 
-	node4 := createNode(t, data.Logger, data.Config, data.PeersSlice[3].ID, data.Keys[3], data.Peers, trans4, data.Adds[3], false)
+	store4 := poset.NewInmemStore(data.Peers, data.Config.CacheSize, nil)
+	node4, pst4 := createNode(t, data.Logger, store4, data.Config, data.PeersSlice[3].ID, data.Keys[3], data.Peers, trans4, data.Adds[3], false)
 	defer node4.Shutdown()
 
 	nodes := []*Node{node1, node2, node3, node4}
+	posets := []*poset.Poset{pst1, pst2, pst3, pst4}
 
 	target := int64(3)
-	err := gossip(nodes[1:], target, false, 60*time.Second)
+	err := gossip(nodes[1:], posets[1:], target, false, 60*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,12 +822,12 @@ func TestFastForward(t *testing.T) {
 	if lbi < 0 {
 		t.Fatalf("LastBlockIndex is too low: %d", lbi)
 	}
-	sBlock, err := nodes[0].GetBlock(lbi)
+	sBlock, err := posets[0].Store.GetBlock(lbi)
 	if err != nil {
 		t.Fatalf("Error retrieving latest Block"+
 			" from reset hasposetraph: %v", err)
 	}
-	expectedBlock, err := nodes[1].GetBlock(lbi)
+	expectedBlock, err := posets[1].Store.GetBlock(lbi)
 	if err != nil {
 		t.Fatalf("Failed to retrieve block %d from node1: %v", lbi, err)
 	}
@@ -807,7 +841,7 @@ func TestFastSync(t *testing.T) {
 	var let sync.Mutex
 	caught := false
 	logger := common.NewTestLogger(t)
-	
+
 	poolSize := 2
 	config := TestConfig(t)
 	backConfig := peer.NewBackendConfig()
@@ -832,23 +866,29 @@ func TestFastSync(t *testing.T) {
 		poolSize, createFu, network.CreateListener)
 	defer transportClose(t, trans4)
 
-	node1 := createNode(t, logger, config, ps[0].ID, keys[0], p, trans1, adds[0], true)
+	// Create & Init node
+	store1 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node1, pst1 := createNode(t, logger, store1, config, ps[0].ID, keys[0], p, trans1, adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, logger, config, ps[1].ID, keys[1], p, trans2, adds[1], true)
+	store2 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node2, pst2 := createNode(t, logger, store2, config, ps[1].ID, keys[1], p, trans2, adds[0], false)
 	defer node2.Shutdown()
 
-	node3 := createNode(t, logger, config, ps[2].ID, keys[2], p, trans3, adds[2], true)
+	store3 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node3, pst3 := createNode(t, logger, store3, config, ps[2].ID, keys[2], p, trans3, adds[0], false)
 	defer node3.Shutdown()
 
-	node4 := createNode(t, logger, config, ps[3].ID, keys[3], p, trans4, adds[3], true)
+	store4 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node4, pst4 := createNode(t, logger, store4, config, ps[3].ID, keys[0], p, trans4, adds[0], false)
 	defer node4.Shutdown()
 
 	nodes := []*Node{node1, node2, node3, node4}
+	posets := []*poset.Poset{pst1, pst2, pst3, pst4}
 
 	var target int64 = 10
 
-	err := gossip(nodes, target, false, 30*time.Second)
+	err := gossip(nodes, posets, target, false, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,7 +898,7 @@ func TestFastSync(t *testing.T) {
 	node4.Shutdown()
 
 	secondTarget := target + 10
-	err = bombardAndWait(nodes[0:3], secondTarget, 30*time.Second)
+	err = bombardAndWait(nodes[0:3], posets[0:3], secondTarget, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -889,10 +929,11 @@ func TestFastSync(t *testing.T) {
 	node4.RunAsync(true)
 
 	nodes[3] = node4
+	posets[3] = pst4
 
 	// Gossip some more
 	thirdTarget := secondTarget + 10
-	err = bombardAndWait(nodes, thirdTarget, 25*time.Second)
+	err = bombardAndWait(nodes, posets, thirdTarget, 25*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -944,21 +985,27 @@ func TestBootstrapAllNodes(t *testing.T) {
 		poolSize, createFu, network.CreateListener)
 	defer transportClose(t, trans4)
 
-	node1 := createNode(t, logger, config, ps[0].ID, keys[0], p, trans1, adds[0], true)
+	// Create & Init node
+	store1 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node1, pst1 := createNode(t, logger, store1, config, ps[0].ID, keys[0], p, trans1, adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, logger, config, ps[1].ID, keys[1], p, trans2, adds[1], true)
+	store2 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node2, pst2 := createNode(t, logger, store2, config, ps[1].ID, keys[1], p, trans2, adds[0], false)
 	defer node2.Shutdown()
 
-	node3 := createNode(t, logger, config, ps[2].ID, keys[2], p, trans3, adds[2], true)
+	store3 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node3, pst3 := createNode(t, logger, store3, config, ps[2].ID, keys[2], p, trans3, adds[0], false)
 	defer node3.Shutdown()
 
-	node4 := createNode(t, logger, config, ps[3].ID, keys[3], p, trans4, adds[3], true)
+	store4 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node4, pst4 := createNode(t, logger, store4, config, ps[3].ID, keys[0], p, trans4, adds[0], false)
 	defer node4.Shutdown()
 
 	nodes := []*Node{node1, node2, node3, node4}
+	posets := []*poset.Poset{pst1, pst2, pst3, pst4}
 
-	err := gossip(nodes, 10, false, 3*time.Second)
+	err := gossip(nodes, posets, 10, false, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -973,7 +1020,7 @@ func TestBootstrapAllNodes(t *testing.T) {
 	for _, n := range nodes {
 		n.RunAsync(true)
 	}
-	err = gossip(newNodes, 20, false, 3*time.Second)
+	err = gossip(newNodes, posets, 20, false, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1015,16 +1062,21 @@ func TestShutdown(t *testing.T) {
 		poolSize, createFu, network.CreateListener)
 	defer transportClose(t, trans4)
 
-	node1 := createNode(t, logger, config, ps[0].ID, keys[0], p, trans1, adds[0], false)
+	// Create & Init node
+	store1 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node1, _ := createNode(t, logger, store1, config, ps[0].ID, keys[0], p, trans1, adds[0], false)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, logger, config, ps[1].ID, keys[1], p, trans2, adds[1], false)
+	store2 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node2, _ := createNode(t, logger, store2, config, ps[1].ID, keys[1], p, trans2, adds[0], false)
 	defer node2.Shutdown()
 
-	node3 := createNode(t, logger, config, ps[2].ID, keys[2], p, trans3, adds[2], false)
+	store3 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node3, _ := createNode(t, logger, store3, config, ps[2].ID, keys[2], p, trans3, adds[0], false)
 	defer node3.Shutdown()
 
-	node4 := createNode(t, logger, config, ps[3].ID, keys[3], p, trans4, adds[3], false)
+	store4 := poset.NewInmemStore(p, config.CacheSize, nil)
+	node4, _ := createNode(t, logger, store4, config, ps[3].ID, keys[0], p, trans4, adds[0], false)
 	defer node4.Shutdown()
 
 	nodes := []*Node{node1, node2, node3, node4}
