@@ -11,6 +11,7 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/log"
 	"github.com/Fantom-foundation/go-lachesis/src/node"
+	"github.com/Fantom-foundation/go-lachesis/src/node2"
 	"github.com/Fantom-foundation/go-lachesis/src/peer"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
@@ -177,12 +178,14 @@ func (l *Lachesis) initNode() error {
 
 	l.Poset = pst
 
+	posetWrapper := node2.NewPosetWrapper(pst)
+
 	l.Node = node.NewNode(
 		&l.Config.NodeConfig,
 		nodeID,
 		key,
 		l.Peers,
-		pst,
+		posetWrapper,
 		commitCh,
 		l.Store.NeedBootstrap(),
 		l.Transport,

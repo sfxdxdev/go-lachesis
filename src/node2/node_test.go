@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"testing"
 	"time"
-	
+
 	"github.com/sirupsen/logrus"
-	
+
 	"github.com/Fantom-foundation/go-lachesis/src/common"
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/dummy"
@@ -130,7 +130,9 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	commitCh := make(chan poset.Block, 400)
 	pst := poset.NewPoset(participants, db, commitCh, logEntry)
 
-	node := NewNode(config, id, key, participants, pst, commitCh, db.NeedBootstrap(), trans, app, localAddr)
+	posetWrapper := NewPosetWrapper(pst)
+
+	node := NewNode(config, id, key, participants, posetWrapper, commitCh, db.NeedBootstrap(), trans, app, localAddr)
 	node.testMode = testMode
 
 	if err := node.Init(); err != nil {
@@ -195,7 +197,7 @@ func bombardAndWait(nodes []*Node, target int64, timeout time.Duration) error {
 		time.Sleep(10 * time.Millisecond)
 		done := true
 		for _, n := range nodes {
-			ce := n.core.poset.Store.LastBlockIndex()
+			ce := n.core.poset.GetLastBlockIndex()
 			if ce < target {
 				done = false
 				tag = fmt.Sprintf("ce<target:%v<%v", ce, target)
@@ -203,7 +205,7 @@ func bombardAndWait(nodes []*Node, target int64, timeout time.Duration) error {
 			} else {
 				// wait until the target block has retrieved a state hash from
 				// the app
-				targetBlock, _ := n.core.poset.Store.GetBlock(target)
+				targetBlock, _ := n.core.poset.GetBlock(target)
 				if len(targetBlock.GetStateHash()) == 0 {
 					done = false
 					tag = "stateHash==0"
@@ -229,9 +231,9 @@ func checkGossip(nodes []*Node, fromBlock int64, t *testing.T) {
 	nodeBlocks := map[uint64][]poset.Block{}
 	for _, n := range nodes {
 		var blocks []poset.Block
-		lastIndex := n.core.poset.Store.LastBlockIndex()
+		lastIndex := n.core.poset.GetLastBlockIndex()
 		for i := fromBlock; i < lastIndex; i++ {
-			block, err := n.core.poset.Store.GetBlock(i)
+			block, err := n.core.poset.GetBlock(i)
 			if err != nil {
 				t.Fatalf("checkGossip: %v ", err)
 			}
@@ -449,13 +451,13 @@ func TestSyncProcess(t *testing.T) {
 	if l := len(node1Head.Transactions()); l == 1 {
 		t.Fatalf("expected %d, got %d", 0, l)
 	}
-	
+
 	// Get head & check tx count
 	node2Head, err := node2.core.GetHead()
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	if l := len(node2Head.Transactions()); l != 1 {
 		t.Fatalf("expected %d, got %d", 1, l)
 	}

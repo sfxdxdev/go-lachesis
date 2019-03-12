@@ -14,12 +14,6 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
 
-const (
-	// MaxEventsPayloadSize is size limitation of txs in bytes.
-	// TODO: collect the similar magic constants in protocol config.
-	MaxEventsPayloadSize = 100 * 1024 * 1024
-)
-
 var (
 	// ErrTooBigTx is returned when transaction size > MaxEventsPayloadSize
 	ErrTooBigTx = fmt.Errorf("transaction too big")
@@ -31,7 +25,7 @@ type Core struct {
 	key    *ecdsa.PrivateKey
 	pubKey []byte
 	hexID  string
-	poset  *poset.Poset
+	poset  Poset
 
 	participants *peers.Peers // [PubKey] => id
 	head         poset.EventHash
@@ -46,11 +40,13 @@ type Core struct {
 	transactionPoolLocker         sync.RWMutex
 	internalTransactionPoolLocker sync.RWMutex
 	blockSignaturePoolLocker      sync.RWMutex
+
+	maxEventsPayloadSize int // MaxEventsPayloadSize is size limitation of txs in bytes.
 }
 
 // NewCore creates a new core struct
 func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
-	pst *poset.Poset, logger *logrus.Logger) *Core {
+	pst Poset, logger *logrus.Logger, maxEventsPayloadSize int) *Core {
 
 	if logger == nil {
 		logger = logrus.New()
@@ -69,6 +65,7 @@ func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
 		blockSignaturePool:      []poset.BlockSignature{},
 		logger:                  logEntry,
 		head:                    poset.EventHash{},
+		maxEventsPayloadSize:    maxEventsPayloadSize,
 	}
 
 	pst.SetCore(core)
@@ -90,7 +87,7 @@ func (c *Core) bootstrapInDegrees() {
 		c.participants.SetInDegreeByPubKeyHex(pubKey, 0)
 	}
 	for _, pubKey := range c.participants.ToPubKeySlice() {
-		eventHash, _, err := c.poset.Store.LastEventFrom(pubKey)
+		eventHash, _, err := c.poset.GetLastEvent(pubKey)
 		if err != nil {
 			continue
 		}
@@ -98,16 +95,18 @@ func (c *Core) bootstrapInDegrees() {
 			if otherPubKey == pubKey {
 				continue
 			}
-			events, err := c.poset.Store.ParticipantEvents(otherPubKey, -1)
+			events, err := c.poset.GetParticipantEvents(otherPubKey, -1)
 			if err != nil {
 				continue
 			}
-			for _, eh := range events {
-				event, err := c.poset.Store.GetEventBlock(eh)
+			for _, eh := range *events {
+				event, err := c.poset.GetEventBlock(eh)
 				if err != nil {
 					continue
 				}
-				if event.OtherParent() == eventHash {
+
+				parentEvent := event.OtherParent()
+				if &parentEvent == eventHash {
 					c.participants.IncInDegreeByPubKeyHex(pubKey)
 				}
 			}
@@ -143,24 +142,24 @@ func (c *Core) SetHeadAndHeight() error {
 	var head poset.EventHash
 	var height int64
 
-	last, isRoot, err := c.poset.Store.LastEventFrom(c.HexID())
+	last, isRoot, err := c.poset.GetLastEvent(c.HexID())
 	if err != nil {
 		return err
 	}
 
 	if isRoot {
-		root, err := c.poset.Store.GetRoot(c.HexID())
+		root, err := c.poset.GetRoot(c.HexID())
 		if err != nil {
 			return err
 		}
 		head.Set(root.SelfParent.Hash)
 		height = root.SelfParent.Index
 	} else {
-		lastEvent, err := c.poset.Store.GetEventBlock(last)
+		lastEvent, err := c.poset.GetEventBlock(*last)
 		if err != nil {
 			return err
 		}
-		head = last
+		head = *last
 		height = lastEvent.Index()
 	}
 
@@ -202,13 +201,13 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 			continue
 		}
 		// get participant Events with index > ct
-		participantEvents, err := c.poset.Store.ParticipantEvents(peer.PubKeyHex, ct)
+		participantEvents, err := c.poset.GetParticipantEvents(peer.PubKeyHex, ct)
 		if err != nil {
 			return []poset.Event{}, err
 		}
 
-		for _, e := range participantEvents {
-			ev, err := c.poset.Store.GetEventBlock(e)
+		for _, e := range *participantEvents {
+			ev, err := c.poset.GetEventBlock(e)
 			if err != nil {
 				return []poset.Event{}, err
 			}
@@ -224,7 +223,7 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 			}).Debugf("Sending Unknown Event")
 
 			// TODO: Perhaps we should replace it to map for better performance.
-			unknown = append(unknown, ev)
+			unknown = append(unknown, *ev)
 		}
 	}
 	sort.Stable(poset.ByTopologicalOrder(unknown))
@@ -263,8 +262,8 @@ func (c *Core) GetBlockSignaturePoolCount() int64 {
 }
 
 // GetHead get the current latest event block head
-func (c *Core) GetHead() (poset.Event, error) {
-	return c.poset.Store.GetEventBlock(c.head)
+func (c *Core) GetHead() (*poset.Event, error) {
+	return c.poset.GetEventBlock(c.head)
 }
 
 // AddIntoPoset add unknown events into our poset
@@ -272,7 +271,7 @@ func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]poset.WireEvent) 
 
 	myKnownHeights := c.GetKnownHeights()
 
-	otherHead, _, err := c.poset.Store.LastEventFrom(peer.PubKeyHex)
+	otherHead, _, err := c.poset.GetLastEvent(peer.PubKeyHex)
 	if err != nil {
 		return err
 	}
@@ -296,7 +295,7 @@ func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]poset.WireEvent) 
 
 		// assume last event corresponds to other-head
 		if k == len(*unknownEvents)-1 {
-			otherHead = ev.Hash()
+			*otherHead = ev.Hash()
 		}
 	}
 
@@ -306,7 +305,7 @@ func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]poset.WireEvent) 
 		c.GetTransactionPoolCount() > 0 ||
 		c.GetInternalTransactionPoolCount() > 0 ||
 		c.GetBlockSignaturePoolCount() > 0 {
-		return c.AddSelfEventBlock(otherHead)
+		return c.AddSelfEventBlock(*otherHead)
 	}
 	return nil
 }
@@ -333,7 +332,7 @@ func (c *Core) InsertEvent(event poset.Event, setWireInfo bool) error {
 	}
 	c.participants.SetInDegreeByPubKeyHex(event.GetCreator(), 0)
 
-	if otherEvent, err := c.poset.Store.GetEventBlock(event.OtherParent()); err == nil {
+	if otherEvent, err := c.poset.GetEventBlock(event.OtherParent()); err == nil {
 		c.participants.IncInDegreeByPubKeyHex(otherEvent.GetCreator())
 	}
 	return nil
@@ -346,11 +345,11 @@ func (c *Core) AddSelfEventBlock(otherHead poset.EventHash) error {
 	defer c.addSelfEventBlockLocker.Unlock()
 
 	// Get flag tables from parents
-	parentEvent, errSelf := c.poset.Store.GetEventBlock(c.head)
+	parentEvent, errSelf := c.poset.GetEventBlock(c.head)
 	if errSelf != nil {
 		c.logger.Warnf("failed to get parent: %s", errSelf)
 	}
-	otherParentEvent, errOther := c.poset.Store.GetEventBlock(otherHead)
+	otherParentEvent, errOther := c.poset.GetEventBlock(otherHead)
 	if errOther != nil {
 		c.logger.Warnf("failed to get other parent: %s", errOther)
 	}
@@ -382,7 +381,7 @@ func (c *Core) AddSelfEventBlock(otherHead poset.EventHash) error {
 	for nTxs = 0; nTxs < len(c.transactionPool); nTxs++ {
 		// NOTE: if len(tx)>MaxEventsPayloadSize it will be payloadSize>MaxEventsPayloadSize
 		txSize := len(c.transactionPool[nTxs])
-		if nTxs > 0 && payloadSize >= (MaxEventsPayloadSize-txSize) {
+		if nTxs > 0 && payloadSize >= (c.maxEventsPayloadSize-txSize) {
 			break
 		}
 		payloadSize += txSize
@@ -437,16 +436,16 @@ func (c *Core) SignAndInsertSelfEvent(event poset.Event) error {
 // AddTransactions add transactions to the pending pool
 func (c *Core) AddTransactions(txs [][]byte) error {
 	for _, tx := range txs {
-		if len(tx) > MaxEventsPayloadSize {
+		if len(tx) > c.maxEventsPayloadSize {
 			return ErrTooBigTx
 		}
 	}
 
 	c.transactionPoolLocker.Lock()
 	defer c.transactionPoolLocker.Unlock()
-	
+
 	c.transactionPool = append(c.transactionPool, txs...)
-	
+
 	return nil
 }
 
@@ -454,6 +453,6 @@ func (c *Core) AddTransactions(txs [][]byte) error {
 func (c *Core) AddInternalTransactions(txs []poset.InternalTransaction) {
 	c.internalTransactionPoolLocker.Lock()
 	defer c.internalTransactionPoolLocker.Unlock()
-	
+
 	c.internalTransactionPool = append(c.internalTransactionPool, txs...)
 }

@@ -15,18 +15,10 @@ import (
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 	"github.com/Fantom-foundation/go-lachesis/src/proxy"
-	"github.com/Fantom-foundation/go-lachesis/src/service"
 )
-
-// Stats used for logStats.
-type Stats interface {
-	Stats() map[string]string
-	LastRound() int64
-}
 
 type Node struct {
 	*nodeState
-	stats Stats
 
 	conf   *Config
 	logger *logrus.Entry
@@ -54,7 +46,7 @@ type Node struct {
 	gossipJobs    count64
 	rpcJobs       count64
 
-	testMode     bool
+	testMode bool
 }
 
 // NewNode create a new node struct
@@ -62,14 +54,14 @@ func NewNode(conf *Config,
 	id uint64,
 	key *ecdsa.PrivateKey,
 	participants *peers.Peers,
-	pst *poset.Poset,
+	pst Poset,
 	commitCh chan poset.Block,
 	needBootstrap bool,
 	trans peer.SyncPeer,
 	proxy proxy.AppProxy,
 	localAddr string) *Node {
 
-	core := NewCore(id, key, participants, pst, conf.Logger)
+	core := NewCore(id, key, participants, pst, conf.Logger, conf.MaxEventsPayloadSize)
 
 	pubKey := core.HexID()
 
@@ -92,9 +84,6 @@ func NewNode(conf *Config,
 		signalTERMch:     make(chan os.Signal, 1),
 		testMode:         false,
 	}
-
-	stats := service.NewStats(pst.Store, pst, &node)
-	node.stats = stats
 
 	signal.Notify(node.signalTERMch, syscall.SIGTERM, os.Kill)
 
@@ -152,8 +141,6 @@ func (n *Node) Run() {
 		switch state {
 		case Gossiping:
 			n.requestHandler()
-		case CatchingUp:
-			// TODO:
 		case Stop:
 			// do nothing in Stop state
 		case Shutdown:
@@ -186,8 +173,8 @@ func (n *Node) Shutdown() {
 		// transport and store should only be closed once all concurrent operations
 		// are finished otherwise they will panic trying to use close objects
 		n.trans.Close()
-		if err := n.core.poset.Store.Close(); err != nil {
-			n.logger.WithError(err).Debug("node::Shutdown::n.core.poset.Store.Close()")
+		if err := n.core.poset.Close(); err != nil {
+			n.logger.WithError(err).Debug("node::Shutdown::n.core.poset.Close()")
 		}
 	}
 }
@@ -239,7 +226,7 @@ func (n *Node) SyncRate() float64 {
 ////// SYNC //////
 
 func (n *Node) gossip(peer *peers.Peer) error {
-	
+
 	// Get data from peer
 	events, heights, err := n.getUnknownEventsFromPeer(peer)
 	if err != nil {

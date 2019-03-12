@@ -56,7 +56,7 @@ func (n *Node) requestHandler() {
 					n.gossipJobs.decrement()
 				})
 			}
-			
+
 			n.resetTimer()
 		case <-n.shutdownCh:
 			return
@@ -110,7 +110,7 @@ func (n *Node) requestWithHeights(target string, heights map[uint64]int64) (*pee
 
 func (n *Node) processRequestWithEvents(rpc *peer.RPC, cmd *peer.ForceSyncRequest) {
 	success := true
-	participants, err := n.core.poset.Store.Participants()
+	participants, err := n.core.poset.GetParticipants()
 	if err != nil {
 		success = false
 	}

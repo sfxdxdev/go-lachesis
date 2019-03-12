@@ -11,12 +11,13 @@ import (
 
 // Config for node configuration settings
 type Config struct {
-	HeartbeatTimeout time.Duration `mapstructure:"heartbeat"`
-	TCPTimeout       time.Duration `mapstructure:"timeout"`
-	CacheSize        int           `mapstructure:"cache-size"`
-	SyncLimit        int64         `mapstructure:"sync-limit"`
-	Logger           *logrus.Logger
-	TestDelay        uint64 `mapstructure:"test_delay"`
+	HeartbeatTimeout     time.Duration `mapstructure:"heartbeat"`
+	TCPTimeout           time.Duration `mapstructure:"timeout"`
+	CacheSize            int           `mapstructure:"cache-size"`
+	SyncLimit            int64         `mapstructure:"sync-limit"`
+	Logger               *logrus.Logger
+	TestDelay            uint64 `mapstructure:"test_delay"`
+	MaxEventsPayloadSize int    `mapstructure:"max-events-payload-size"`
 }
 
 // NewConfig creates a new node config
@@ -42,12 +43,13 @@ func DefaultConfig() *Config {
 	lachesis_log.NewLocal(logger, logger.Level.String())
 
 	return &Config{
-		HeartbeatTimeout: 10 * time.Millisecond,
-		TCPTimeout:       180 * 1000 * time.Millisecond,
-		CacheSize:        500,
-		SyncLimit:        100,
-		Logger:           logger,
-		TestDelay:        1,
+		HeartbeatTimeout:     10 * time.Millisecond,
+		TCPTimeout:           180 * 1000 * time.Millisecond,
+		CacheSize:            500,
+		SyncLimit:            100,
+		Logger:               logger,
+		TestDelay:            1,
+		MaxEventsPayloadSize: 100 * 1024 * 1024,
 	}
 }
 

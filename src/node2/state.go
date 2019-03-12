@@ -7,8 +7,6 @@ import (
 const (
 	// Gossiping is the initial state of a Lachesis node.
 	Gossiping state = iota
-	// CatchingUp is the fast forward state
-	CatchingUp
 	// Shutdown is the shut down state
 	Shutdown
 	// Stop is the stop communicating state
@@ -41,8 +39,6 @@ func (s state) String() string {
 	switch s {
 	case Gossiping:
 		return "Gossiping"
-	case CatchingUp:
-		return "CatchingUp"
 	case Shutdown:
 		return "Shutdown"
 	case Stop:
