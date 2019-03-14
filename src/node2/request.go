@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Fantom-foundation/go-lachesis/src/node2/wire"
 	"github.com/Fantom-foundation/go-lachesis/src/peer"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
@@ -92,7 +93,7 @@ func (n *Node) processRequest(rpc *peer.RPC) {
 	}
 }
 
-func (n *Node) requestWithEvents(target string, events []poset.WireEvent) (*peer.ForceSyncResponse, error) {
+func (n *Node) requestWithEvents(target string, events []wire.Event) (*peer.ForceSyncResponse, error) {
 	args := &peer.ForceSyncRequest{FromID: n.id, Events: events}
 	out := &peer.ForceSyncResponse{}
 	err := n.trans.ForceSync(context.Background(), target, args, out)
@@ -110,17 +111,15 @@ func (n *Node) requestWithHeights(target string, heights map[uint64]int64) (*pee
 
 func (n *Node) processRequestWithEvents(rpc *peer.RPC, cmd *peer.ForceSyncRequest) {
 	success := true
-	participants, err := n.core.poset.GetParticipants()
-	if err != nil {
-		success = false
-	}
+	participants := n.core.participants
+
 	p, ok := participants.ReadByID(cmd.FromID)
 	if !ok {
 		success = false
 	}
 
 	n.coreLock.Lock()
-	err = n.addIntoPoset(&p, &cmd.Events)
+	err := n.addIntoPoset(&p, &cmd.Events)
 	if err != nil {
 		success = false
 	}
@@ -155,7 +154,7 @@ func (n *Node) processRequestWithHeights(rpc *peer.RPC, cmd *peer.SyncRequest) {
 		wireEvents := n.core.ToWire(eventDiff)
 		resp.Events = wireEvents
 	} else {
-		resp.Events = []poset.WireEvent{}
+		resp.Events = []wire.Event{}
 	}
 
 	// Get Self Known

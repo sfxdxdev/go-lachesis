@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"github.com/Fantom-foundation/go-lachesis/src/node2/wire"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 	"github.com/sirupsen/logrus"
 )
@@ -16,14 +17,14 @@ type SyncRequest struct {
 type SyncResponse struct {
 	FromID    uint64
 	SyncLimit bool
-	Events    []poset.WireEvent
+	Events    []wire.Event
 	Known     map[uint64]int64
 }
 
 // ForceSyncRequest after an initial sync to quickly catch up.
 type ForceSyncRequest struct {
 	FromID uint64
-	Events []poset.WireEvent
+	Events []wire.Event
 }
 
 // ForceSyncResponse response to an ForceSyncRequest.

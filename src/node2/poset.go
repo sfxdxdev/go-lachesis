@@ -3,7 +3,6 @@ package node2
 import (
 	"crypto/ecdsa"
 
-	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
 
@@ -11,13 +10,8 @@ type Poset interface {
 	GetLastEvent(string) (*poset.EventHash, bool, error)
 	GetParticipantEvents(string, int64) (*poset.EventHashes, error)
 	GetEventBlock(poset.EventHash) (*poset.Event, error)
-	GetRoot(string) (*poset.Root, error)
 	Close() error
-	SetCore(core *Core)
 	GetPendingLoadedEvents() int64
-	GetParticipants() (*peers.Peers, error)
-	Bootstrap() error
-	ReadWireInfo(poset.WireEvent) (*poset.Event, error)
 	InsertEvent(poset.Event, bool) error
 	SetWireInfoAndSign(*poset.Event, *ecdsa.PrivateKey) error
 	GetLastBlockIndex() int64
@@ -61,47 +55,12 @@ func (p *PosetWrapper) GetEventBlock(hash poset.EventHash) (*poset.Event, error)
 	return &event, nil
 }
 
-func (p *PosetWrapper) GetRoot(hex string) (*poset.Root, error) {
-	root, err := p.poset.Store.GetRoot(hex)
-	if err != nil {
-		return nil, err
-	}
-
-	return &root, nil
-}
-
 func (p *PosetWrapper) Close() error {
 	return p.poset.Store.Close()
 }
 
-func (p *PosetWrapper) SetCore(core *Core) {
-	p.poset.SetCore(core)
-}
-
 func (p *PosetWrapper) GetPendingLoadedEvents() int64 {
 	return p.poset.GetPendingLoadedEvents()
-}
-
-func (p *PosetWrapper) GetParticipants() (*peers.Peers, error) {
-	participants, err := p.poset.Store.Participants()
-	if err != nil {
-		return nil, err
-	}
-
-	return participants, nil
-}
-
-func (p *PosetWrapper) Bootstrap() error {
-	return p.poset.Bootstrap()
-}
-
-func (p *PosetWrapper) ReadWireInfo(wireEvent poset.WireEvent) (*poset.Event, error) {
-	ev, err := p.poset.ReadWireInfo(wireEvent)
-	if err != nil {
-		return nil, err
-	}
-
-	return ev, nil
 }
 
 func (p *PosetWrapper) InsertEvent(event poset.Event, setWireInfo bool) error {

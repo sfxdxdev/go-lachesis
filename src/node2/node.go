@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Fantom-foundation/go-lachesis/src/node2/wire"
 	"github.com/Fantom-foundation/go-lachesis/src/peer"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
@@ -263,7 +264,7 @@ func (n *Node) gossip(peer *peers.Peer) error {
 	return nil
 }
 
-func (n *Node) getUnknownEventsFromPeer(peer *peers.Peer) (*[]poset.WireEvent, *map[uint64]int64, error) {
+func (n *Node) getUnknownEventsFromPeer(peer *peers.Peer) (*[]wire.Event, *map[uint64]int64, error) {
 	// Get known heights for all known nodes.
 	n.coreLock.Lock()
 	knownHeights := n.core.GetKnownHeights()
@@ -278,7 +279,7 @@ func (n *Node) getUnknownEventsFromPeer(peer *peers.Peer) (*[]poset.WireEvent, *
 	return &resp.Events, &resp.Known, nil
 }
 
-func (n *Node) addIntoPoset(peer *peers.Peer, events *[]poset.WireEvent) error {
+func (n *Node) addIntoPoset(peer *peers.Peer, events *[]wire.Event) error {
 	err := n.core.AddIntoPoset(peer, events)
 	if err != nil {
 		return err
@@ -289,7 +290,7 @@ func (n *Node) addIntoPoset(peer *peers.Peer, events *[]poset.WireEvent) error {
 	return nil
 }
 
-func (n *Node) collectUnknownEventsForPeer(peer *peers.Peer, knownEvents *map[uint64]int64) (*[]poset.WireEvent, error) {
+func (n *Node) collectUnknownEventsForPeer(peer *peers.Peer, knownEvents *map[uint64]int64) (*[]wire.Event, error) {
 	// Get unknown events for source node
 	n.coreLock.Lock()
 	eventDiff, err := n.core.EventDiff(*knownEvents)
@@ -301,7 +302,7 @@ func (n *Node) collectUnknownEventsForPeer(peer *peers.Peer, knownEvents *map[ui
 
 	// If we don't have any new events for peer -> return without error.
 	if len(eventDiff) == 0 {
-		return &[]poset.WireEvent{}, nil
+		return &[]wire.Event{}, nil
 	}
 
 	// Convert to WireEvents

@@ -6,10 +6,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/go-errors/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/Fantom-foundation/go-lachesis/src/crypto"
 	"github.com/Fantom-foundation/go-lachesis/src/log"
+	"github.com/Fantom-foundation/go-lachesis/src/node2/wire"
 	"github.com/Fantom-foundation/go-lachesis/src/peers"
 	"github.com/Fantom-foundation/go-lachesis/src/poset"
 )
@@ -68,17 +70,13 @@ func NewCore(id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
 		maxEventsPayloadSize:    maxEventsPayloadSize,
 	}
 
-	pst.SetCore(core)
-
 	return core
 }
 
 // Bootstrap the poset with default values
 func (c *Core) Bootstrap() error {
-	if err := c.poset.Bootstrap(); err != nil {
-		return err
-	}
-	c.bootstrapInDegrees()
+	// TODO: uncomment it latter
+	// c.bootstrapInDegrees()
 	return nil
 }
 
@@ -131,11 +129,6 @@ func (c *Core) HexID() string {
 	return c.hexID
 }
 
-// Head returns the current chain head for this core
-func (c *Core) Head() poset.EventHash {
-	return c.head
-}
-
 // SetHeadAndHeight calculates and sets the current head and height for the chain
 func (c *Core) SetHeadAndHeight() error {
 
@@ -147,21 +140,12 @@ func (c *Core) SetHeadAndHeight() error {
 		return err
 	}
 
-	if isRoot {
-		root, err := c.poset.GetRoot(c.HexID())
-		if err != nil {
-			return err
-		}
-		head.Set(root.SelfParent.Hash)
-		height = root.SelfParent.Index
-	} else {
-		lastEvent, err := c.poset.GetEventBlock(*last)
-		if err != nil {
-			return err
-		}
-		head = *last
-		height = lastEvent.Index()
+	lastEvent, err := c.poset.GetEventBlock(*last)
+	if err != nil {
+		return err
 	}
+	head = *last
+	height = lastEvent.Index()
 
 	c.head = head
 	c.participants.SetHeightByPubKeyHex(c.HexID(), height)
@@ -232,10 +216,10 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 }
 
 // ToWire converts event blocks into wire events (to be transported)
-func (c *Core) ToWire(events []poset.Event) []poset.WireEvent {
-	wireEvents := make([]poset.WireEvent, len(events))
+func (c *Core) ToWire(events []poset.Event) []wire.Event {
+	wireEvents := make([]wire.Event, len(events))
 	for i, e := range events {
-		wireEvents[i] = e.ToWire()
+		wireEvents[i] = *c.toWire(e)
 	}
 	return wireEvents
 }
@@ -267,7 +251,7 @@ func (c *Core) GetHead() (*poset.Event, error) {
 }
 
 // AddIntoPoset add unknown events into our poset
-func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]poset.WireEvent) error {
+func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]wire.Event) error {
 
 	myKnownHeights := c.GetKnownHeights()
 
@@ -279,7 +263,7 @@ func (c *Core) AddIntoPoset(peer *peers.Peer, unknownEvents *[]poset.WireEvent) 
 	// Add unknown events
 	for k, we := range *unknownEvents {
 
-		ev, err := c.poset.ReadWireInfo(we)
+		ev, err := c.wireToEvent(&we)
 		if err != nil {
 			return err
 		}
@@ -426,7 +410,11 @@ func (c *Core) AddSelfEventBlock(otherHead poset.EventHash) error {
 
 // SignAndInsertSelfEvent signs and inserts a self generated event block
 func (c *Core) SignAndInsertSelfEvent(event poset.Event) error {
-	if err := c.poset.SetWireInfoAndSign(&event, c.key); err != nil {
+	if err := c.setWireInfo(&event); err != nil {
+		return err
+	}
+
+	if err := event.Sign(c.key); err != nil {
 		return err
 	}
 
@@ -455,4 +443,122 @@ func (c *Core) AddInternalTransactions(txs []poset.InternalTransaction) {
 	defer c.internalTransactionPoolLocker.Unlock()
 
 	c.internalTransactionPool = append(c.internalTransactionPool, txs...)
+}
+
+func (c *Core) setWireInfo(event *poset.Event) error {
+	eventCreator := event.GetCreator()
+	creator, ok := c.participants.ReadByPubKey(eventCreator)
+	if !ok {
+		return fmt.Errorf("creator %s not found", eventCreator)
+	}
+
+	selfParent, err := c.poset.GetEventBlock(event.SelfParent())
+	if err != nil {
+		return err
+	}
+
+	otherParent, err := c.poset.GetEventBlock(event.OtherParent())
+	if err != nil {
+		return err
+	}
+
+	otherParentCreator, ok := c.participants.ReadByPubKey(otherParent.GetCreator())
+	if !ok {
+		return fmt.Errorf("creator %s not found", otherParent.GetCreator())
+	}
+
+	event.SetWireInfo(selfParent.Index(),
+		otherParentCreator.ID,
+		otherParent.Index(),
+		creator.ID)
+
+	return nil
+}
+
+// TODO: Curently we convert to wire from old poset.Event type. After merge with posposet delete this method & use another from event package.
+func (c *Core) toWire(e poset.Event) *wire.Event {
+	transactions := make([]*wire.InternalTransaction, len(e.Message.Body.InternalTransactions))
+	for i, v := range e.Message.Body.InternalTransactions {
+		transactions[i] = &wire.InternalTransaction{
+			Amount:   v.Amount,
+			Receiver: v.Peer.Address().Bytes(),
+		}
+	}
+
+	blockSignatures := e.WireBlockSignatures()
+
+	signatures := make([]*wire.WireBlockSignature, len(blockSignatures))
+	for i, v := range blockSignatures {
+		signatures[i] = &wire.WireBlockSignature{
+			Index:     v.Index,
+			Signature: v.Signature,
+		}
+	}
+
+	return &wire.Event{
+		Index:                uint64(e.Message.TopologicalIndex),
+		Creator:              e.Message.Body.Creator,
+		Parents:              e.Message.Body.Parents,
+		LamportTime:          uint64(e.GetLamportTimestamp()),
+		InternalTransactions: transactions,
+		ExternalTransactions: e.Message.Body.Transactions,
+		Signature:            signatures,
+	}
+}
+
+// TODO: Need only for old type
+func (c *Core) blockSignatures(w *wire.Event) []poset.BlockSignature {
+	if w.Signature != nil {
+		blockSignatures := make([]poset.BlockSignature, len(w.Signature))
+		for k, bs := range w.Signature {
+			blockSignatures[k] = poset.BlockSignature{
+				Validator: w.Creator,
+				Index:     bs.Index,
+				Signature: bs.Signature,
+			}
+		}
+		return blockSignatures
+	}
+	return nil
+}
+
+// TODO: Curently we convert from wire to old poset.Event type. After merge with posposet delete this method & use another from event package.
+func (c *Core) wireToEvent(w *wire.Event) (*poset.Event, error) {
+	if w == nil {
+		return nil, errors.New("Error: wire event is nil")
+	}
+
+	transactions := make([]*poset.InternalTransaction, len(w.InternalTransactions))
+	for i, v := range w.InternalTransactions {
+		transactions[i] = new(poset.InternalTransaction)
+		*transactions[i] = poset.InternalTransaction{
+			Amount: v.Amount,
+			Peer:   &peers.Peer{}, // TODO: fix it
+		}
+	}
+
+	signatureValues := c.blockSignatures(w)
+	blockSignatures := make([]*poset.BlockSignature, len(signatureValues))
+	for i, v := range signatureValues {
+		blockSignatures[i] = new(poset.BlockSignature)
+		*blockSignatures[i] = v
+	}
+
+	body := poset.EventBody{
+		Transactions:         w.ExternalTransactions,
+		InternalTransactions: transactions,
+		Parents:              w.Parents,
+		Creator:              w.Creator,
+		Index:                int64(w.Index),
+		BlockSignatures:      blockSignatures,
+	}
+
+	event := &poset.Event{
+		Message: &poset.EventMessage{
+			Body: &body,
+			// TODO: fix it
+		},
+	}
+
+	return event, nil
 }
