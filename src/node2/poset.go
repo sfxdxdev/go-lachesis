@@ -16,6 +16,7 @@ type Poset interface {
 	SetWireInfoAndSign(*poset.Event, *ecdsa.PrivateKey) error
 	GetLastBlockIndex() int64
 	GetBlock(int64) (poset.Block, error)
+	NewEvent([][]byte, []poset.InternalTransaction, []poset.BlockSignature, poset.EventHashes, []byte, int64, poset.FlagTable) poset.Event
 }
 
 type PosetWrapper struct {
@@ -77,4 +78,8 @@ func (p *PosetWrapper) GetLastBlockIndex() int64 {
 
 func (p *PosetWrapper) GetBlock(target int64) (poset.Block, error) {
 	return p.poset.Store.GetBlock(target)
+}
+
+func (p *PosetWrapper) NewEvent(transactions [][]byte, internalTransactions []poset.InternalTransaction, blockSignatures []poset.BlockSignature, parents poset.EventHashes, creator []byte, index int64, ft poset.FlagTable) poset.Event {
+	return poset.NewEvent(transactions, internalTransactions, blockSignatures, parents, creator, index, ft);
 }

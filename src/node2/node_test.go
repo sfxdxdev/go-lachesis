@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/sirupsen/logrus"
 
 	"github.com/Fantom-foundation/go-lachesis/src/common"
@@ -115,7 +116,7 @@ func transportClose(t *testing.T, syncPeer peer.SyncPeer) {
 
 func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
-	trans peer.SyncPeer, localAddr string, testMode bool) *Node {
+	trans peer.SyncPeer, localAddr string, testMode bool) (*Node, *MockPoset) {
 
 	db := poset.NewInmemStore(participants, config.CacheSize, nil)
 	app := dummy.NewInmemDummyApp(logger)
@@ -125,15 +126,31 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 		logger.Level = logrus.DebugLevel
 		lachesis_log.NewLocal(logger, logger.Level.String())
 	}
-	logEntry := logger.WithField("id", id)
 
 	commitCh := make(chan poset.Block, 400)
-	pst := poset.NewPoset(participants, db, commitCh, logEntry)
 
-	posetWrapper := NewPosetWrapper(pst)
+	// logEntry := logger.WithField("id", id)
+	// pst := poset.NewPoset(participants, db, commitCh, logEntry)
+	// posetWrapper := NewPosetWrapper(pst)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	posetWrapper := NewMockPoset(ctrl)
 
 	node := NewNode(config, id, key, participants, posetWrapper, commitCh, db.NeedBootstrap(), trans, app, localAddr)
 	node.testMode = testMode
+
+	// Mock for init process
+	posetWrapper.EXPECT().GetLastEvent(gomock.Any()).Return(&poset.EventHash{}, false, nil).Times(1)
+
+	event := &poset.Event{
+		Message: &poset.EventMessage{
+			Body: &poset.EventBody{
+				Index: 0,
+			},
+		},
+	}
+	posetWrapper.EXPECT().GetEventBlock(gomock.Any()).Return(event, nil).Times(1)
 
 	if err := node.Init(); err != nil {
 		t.Fatal(err)
@@ -141,7 +158,7 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 
 	go node.Run()
 
-	return node
+	return node, posetWrapper
 }
 
 func gossip(nodes []*Node, target int64, shutdown bool, timeout time.Duration) error {
@@ -271,7 +288,9 @@ func TestCreateAndInitNode(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
+	node, posetWrapper := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
+	// Mock
+	posetWrapper.EXPECT().Close().Return(nil).Times(1)
 
 	// Check status
 	nodeState := node.getState()
@@ -309,7 +328,9 @@ func TestAddTransaction(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
+	node, posetWrapper := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
+	// Mock
+	posetWrapper.EXPECT().Close().Return(nil).Times(1)
 	defer node.Shutdown()
 
 	// Add new Tx
@@ -346,8 +367,15 @@ func TestTxHandler(t *testing.T) {
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
+	node, posetWrapper := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
 	defer node.Shutdown()
+
+	// Mock for submitCh
+	posetWrapper.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	posetWrapper.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	posetWrapper.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
+
+	posetWrapper.EXPECT().Close().Return(nil).Times(1)
 
 	// Check submitCh case
 	message := "Test"
@@ -374,6 +402,8 @@ func TestTxHandler(t *testing.T) {
 	}
 }
 
+
+// TODO: Currently we get stuck on node2.addIntoPoset(data.PeersSlice[0], events) process for node1, probably we have issue with wrong mock.
 func TestSyncProcess(t *testing.T) {
 	// Init data
 	data := InitTestData(t, 2, 2)
@@ -388,11 +418,58 @@ func TestSyncProcess(t *testing.T) {
 	defer transportClose(t, trans2)
 
 	// Create & Init node
-	node1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], true)
+	node1, posetWrapper1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], true)
+	posetWrapper1.EXPECT().Close().Return(nil).Times(1)
 	defer node1.Shutdown()
 
-	node2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], true)
+	node2, posetWrapper2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], true)
+	posetWrapper2.EXPECT().Close().Return(nil).Times(1)
 	defer node2.Shutdown()
+
+	// Mock for node2
+
+	// Submit event process.
+	posetWrapper2.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	posetWrapper2.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	posetWrapper2.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
+
+	// TODO: Probably don't execute currently or we need to change return value.
+	posetWrapper2.EXPECT().GetLastEvent(gomock.Any()).Return(&poset.EventHash{}, false, nil).AnyTimes()
+	
+	var index map[string]poset.EventHash
+	posetWrapper2.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).Return(&poset.EventHashes{}, nil).AnyTimes()
+
+	event := &poset.Event{
+		Message: &poset.EventMessage{
+			Body: &poset.EventBody{
+				Index: 0,
+			},
+			TopologicalIndex: 0,
+		},
+	}
+	posetWrapper2.EXPECT().GetEventBlock(gomock.Any()).Return(event, nil).AnyTimes()
+	
+	posetWrapper2.EXPECT().GetLastBlockIndex().Return(int64(0)).AnyTimes()
+	posetWrapper2.EXPECT().GetBlock(gomock.Any()).Return(poset.Block{}, nil).AnyTimes()
+	posetWrapper2.EXPECT().NewEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(*event).AnyTimes() // TODO: Return event with known creator.
+
+	// Mock for node1
+
+	// Submit event process.
+	posetWrapper1.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	posetWrapper1.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	posetWrapper1.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
+
+	// TODO: Probably don't execute currently or we need to change return value.
+	posetWrapper1.EXPECT().GetLastEvent(gomock.Any()).Return(&poset.EventHash{}, false, nil).AnyTimes()
+	
+	posetWrapper1.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).Return(&poset.EventHashes{index["e4"], index["e03"]}, nil).AnyTimes()
+
+	posetWrapper1.EXPECT().GetEventBlock(gomock.Any()).Return(event, nil).AnyTimes()
+	
+	posetWrapper1.EXPECT().GetLastBlockIndex().Return(int64(0)).AnyTimes()
+	posetWrapper1.EXPECT().GetBlock(gomock.Any()).Return(poset.Block{}, nil).AnyTimes()
 
 	// Submit transaction for node2
 	message := "Test"

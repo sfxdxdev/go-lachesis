@@ -3,7 +3,7 @@ package node2
 import (
 	"crypto/ecdsa"
 	"fmt"
-	"sort"
+	// "sort"
 	"sync"
 
 	"github.com/go-errors/errors"
@@ -196,21 +196,11 @@ func (c *Core) EventDiff(known map[uint64]int64) (events []poset.Event, err erro
 				return []poset.Event{}, err
 			}
 
-			c.logger.WithFields(logrus.Fields{
-				"event":            ev,
-				"creator":          ev.GetCreator(),
-				"selfParent":       ev.SelfParent(),
-				"index":            ev.Index(),
-				"hex":              ev.Hash(),
-				"selfParentIndex":  ev.Message.SelfParentIndex,
-				"otherParentIndex": ev.Message.OtherParentIndex,
-			}).Debugf("Sending Unknown Event")
-
 			// TODO: Perhaps we should replace it to map for better performance.
 			unknown = append(unknown, *ev)
 		}
 	}
-	sort.Stable(poset.ByTopologicalOrder(unknown))
+	// sort.Stable(poset.ByTopologicalOrder(unknown))
 
 	return unknown, nil
 }
@@ -375,7 +365,7 @@ func (c *Core) AddSelfEventBlock(otherHead poset.EventHash) error {
 	c.transactionPoolLocker.Unlock()
 
 	// create new event with self head and empty other parent
-	newHead := poset.NewEvent(batch,
+	newHead := c.poset.NewEvent(batch,
 		c.internalTransactionPool,
 		c.blockSignaturePool,
 		poset.EventHashes{c.head, otherHead}, c.PubKey(), c.participants.NextHeightByPubKeyHex(c.HexID()), flagTable)
