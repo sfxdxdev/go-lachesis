@@ -402,7 +402,7 @@ func TestTxHandler(t *testing.T) {
 	}
 }
 
-
+/*
 // TODO: Currently we get stuck on node2.addIntoPoset(data.PeersSlice[0], events) process for node1, probably we have issue with wrong mock.
 func TestSyncProcess(t *testing.T) {
 	// Init data
@@ -543,4 +543,58 @@ func TestSyncProcess(t *testing.T) {
 	if m := string(node2Head.Transactions()[0]); m != message {
 		t.Fatalf("expected message %s, got %s", message, m)
 	}
+}
+*/
+
+func TestSyncProcess(t *testing.T) {
+	// Init data
+	data := InitTestData(t, 2, 2)
+
+	// Create transport
+	trans1 := createTransport(t, data.Logger, data.BackConfig, data.Adds[0],
+		data.PoolSize, data.CreateFu, data.Network.CreateListener)
+	defer transportClose(t, trans1)
+
+	trans2 := createTransport(t, data.Logger, data.BackConfig, data.Adds[1],
+		data.PoolSize, data.CreateFu, data.Network.CreateListener)
+	defer transportClose(t, trans2)
+
+	// Create & Init node
+	node1, posetWrapper1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], true)
+	posetWrapper1.EXPECT().Close().Return(nil).Times(1)
+	defer node1.Shutdown()
+
+	node2, posetWrapper2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], true)
+	posetWrapper2.EXPECT().Close().Return(nil).Times(1)
+	defer node2.Shutdown()
+
+	////////////////////////////////////////////////
+	
+	posetWrapper2.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	posetWrapper2.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	posetWrapper2.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
+	
+	
+	// Submit transaction for node2
+	message := "Test"
+	node2.submitCh <- []byte(message)
+
+	////////////////////////////////////////////////
+
+	posetWrapper1.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).Return(&poset.EventHashes{}, nil).AnyTimes()
+	posetWrapper1.EXPECT().GetEventBlock(gomock.Any()).Return(&poset.Event{}, nil).AnyTimes()
+	
+	// Get data from node1
+	events, heights, err := node2.getUnknownEventsFromPeer(data.PeersSlice[0])
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	
+	if l := len(*events); l != 0 {
+		t.Fatalf("expected %d, got %d", 0, l)
+	}
+
+	////////////////////////////////////////////////
+
+	println(heights)
 }
