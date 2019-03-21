@@ -28,15 +28,13 @@ type TestData struct {
 	BackConfig *peer.BackendConfig
 	Network    *fakenet.Network
 	CreateFu   peer.CreateSyncClientFunc
-	Keys       []*ecdsa.PrivateKey
-	Adds       []string
-	PeersSlice []*peers.Peer
+	Keys       map[uint64]*ecdsa.PrivateKey
 	Peers      *peers.Peers
 }
 
 func InitTestData(t *testing.T, peersCount int, poolSize int) *TestData {
 	network, createFu := createNetwork()
-	keys, p, adds := initPeers(peersCount, network)
+	keys, p := initPeers(peersCount, network)
 
 	return &TestData{
 		PoolSize:   poolSize,
@@ -46,33 +44,26 @@ func InitTestData(t *testing.T, peersCount int, poolSize int) *TestData {
 		Network:    network,
 		CreateFu:   createFu,
 		Keys:       keys,
-		Adds:       adds,
-		PeersSlice: p.ToPeerSlice(),
 		Peers:      p,
 	}
 }
 
-func initPeers(
-	number int, network *fakenet.Network) ([]*ecdsa.PrivateKey, *peers.Peers, []string) {
-
-	var keys []*ecdsa.PrivateKey
-	var adds []string
-
+func initPeers(number int, network *fakenet.Network) (map[uint64]*ecdsa.PrivateKey, *peers.Peers) {
+	keys := make(map[uint64]*ecdsa.PrivateKey, number)
 	ps := peers.NewPeers()
 
 	for i := 0; i < number; i++ {
 		key, _ := crypto.GenerateECDSAKey()
-		keys = append(keys, key)
 		addr := network.RandomAddress()
-		adds = append(adds, addr)
-
-		ps.AddPeer(peers.NewPeer(
-			fmt.Sprintf("0x%X", crypto.FromECDSAPub(&keys[i].PublicKey)),
+		peer := peers.NewPeer(
+			fmt.Sprintf("0x%X", crypto.FromECDSAPub(&key.PublicKey)),
 			addr,
-		))
+		)
+		keys[peer.ID] = key
+		ps.AddPeer(peer)
 	}
 
-	return keys, ps, adds
+	return keys, ps
 }
 
 func createNetwork() (*fakenet.Network, peer.CreateSyncClientFunc) {
@@ -82,12 +73,12 @@ func createNetwork() (*fakenet.Network, peer.CreateSyncClientFunc) {
 		timeout time.Duration) (peer.SyncClient, error) {
 
 		rpcCli, err := peer.NewRPCClient(
-			peer.TCP, target, time.Second, network.CreateNetConn)
+			peer.TCP, target, timeout, network.CreateNetConn)
 		if err != nil {
 			return nil, err
 		}
 
-		return peer.NewClient(rpcCli)
+		return peer.NewClient(rpcCli, timeout)
 	}
 
 	return network, createFu
@@ -114,9 +105,38 @@ func transportClose(t *testing.T, syncPeer peer.SyncPeer) {
 	}
 }
 
+func fakePoset(ctrl *gomock.Controller) *MockPoset {
+	p := NewMockPoset(ctrl)
+
+	// Mock for init process
+	p.EXPECT().
+		GetLastEvent(gomock.Any()).
+		Return(&poset.EventHash{}, false, nil).
+		Times(1)
+
+	event := &poset.Event{
+		Message: &poset.EventMessage{
+			Body: &poset.EventBody{
+				Index: 0,
+			},
+		},
+	}
+	p.EXPECT().
+		GetEventBlock(gomock.Any()).
+		Return(event, nil).
+		Times(1)
+
+	p.EXPECT().
+		Close().
+		Return(nil).
+		Times(1)
+
+	return p
+}
+
 func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	id uint64, key *ecdsa.PrivateKey, participants *peers.Peers,
-	trans peer.SyncPeer, localAddr string, testMode bool) (*Node, *MockPoset) {
+	trans peer.SyncPeer, localAddr string, consensus Poset, testMode bool) *Node {
 
 	db := poset.NewInmemStore(participants, config.CacheSize, nil)
 	app := dummy.NewInmemDummyApp(logger)
@@ -133,24 +153,8 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 	// pst := poset.NewPoset(participants, db, commitCh, logEntry)
 	// posetWrapper := NewPosetWrapper(pst)
 
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	posetWrapper := NewMockPoset(ctrl)
-
-	node := NewNode(config, id, key, participants, posetWrapper, commitCh, db.NeedBootstrap(), trans, app, localAddr)
+	node := NewNode(config, id, key, participants, consensus, commitCh, db.NeedBootstrap(), trans, app, localAddr)
 	node.testMode = testMode
-
-	// Mock for init process
-	posetWrapper.EXPECT().GetLastEvent(gomock.Any()).Return(&poset.EventHash{}, false, nil).Times(1)
-
-	event := &poset.Event{
-		Message: &poset.EventMessage{
-			Body: &poset.EventBody{
-				Index: 0,
-			},
-		},
-	}
-	posetWrapper.EXPECT().GetEventBlock(gomock.Any()).Return(event, nil).Times(1)
 
 	if err := node.Init(); err != nil {
 		t.Fatal(err)
@@ -158,7 +162,7 @@ func createNode(t *testing.T, logger *logrus.Logger, config *Config,
 
 	go node.Run()
 
-	return node, posetWrapper
+	return node
 }
 
 func gossip(nodes []*Node, target int64, shutdown bool, timeout time.Duration) error {
@@ -279,18 +283,21 @@ func checkGossip(nodes []*Node, fromBlock int64, t *testing.T) {
 }
 
 func TestCreateAndInitNode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	// Init data
 	data := InitTestData(t, 1, 2)
 
 	// Create transport
-	trans := createTransport(t, data.Logger, data.BackConfig, data.Adds[0],
+	peer0 := data.Peers.ToPeerSlice()[0]
+	trans := createTransport(t, data.Logger, data.BackConfig, peer0.NetAddr,
 		data.PoolSize, data.CreateFu, data.Network.CreateListener)
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node, posetWrapper := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
-	// Mock
-	posetWrapper.EXPECT().Close().Return(nil).Times(1)
+	consensus := fakePoset(ctrl)
+	node := createNode(t, data.Logger, data.Config, peer0.ID, data.Keys[peer0.ID], data.Peers, trans, peer0.NetAddr, consensus, true)
 
 	// Check status
 	nodeState := node.getState()
@@ -299,7 +306,7 @@ func TestCreateAndInitNode(t *testing.T) {
 	}
 
 	// Check ID
-	if node.ID() != data.PeersSlice[0].ID {
+	if node.ID() != peer0.ID {
 		t.Fatal(node.id)
 	}
 
@@ -319,18 +326,20 @@ func TestCreateAndInitNode(t *testing.T) {
 }
 
 func TestAddTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 	// Init data
 	data := InitTestData(t, 1, 2)
+	peer0 := data.Peers.ToPeerSlice()[0]
 
 	// Create transport
-	trans := createTransport(t, data.Logger, data.BackConfig, data.Adds[0],
+	trans := createTransport(t, data.Logger, data.BackConfig, peer0.NetAddr,
 		data.PoolSize, data.CreateFu, data.Network.CreateListener)
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node, posetWrapper := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
-	// Mock
-	posetWrapper.EXPECT().Close().Return(nil).Times(1)
+	consensus := fakePoset(ctrl)
+	node := createNode(t, data.Logger, data.Config, peer0.ID, data.Keys[peer0.ID], data.Peers, trans, peer0.NetAddr, consensus, true)
 	defer node.Shutdown()
 
 	// Add new Tx
@@ -358,31 +367,33 @@ func TestAddTransaction(t *testing.T) {
 }
 
 func TestTxHandler(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 	// Init data
 	data := InitTestData(t, 1, 2)
+	peer0 := data.Peers.ToPeerSlice()[0]
 
 	// Create transport
-	trans := createTransport(t, data.Logger, data.BackConfig, data.Adds[0],
+	trans := createTransport(t, data.Logger, data.BackConfig, peer0.NetAddr,
 		data.PoolSize, data.CreateFu, data.Network.CreateListener)
 	defer transportClose(t, trans)
 
 	// Create & Init node
-	node, posetWrapper := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans, data.Adds[0], true)
+	consensus := fakePoset(ctrl)
+	node := createNode(t, data.Logger, data.Config, peer0.ID, data.Keys[peer0.ID], data.Peers, trans, peer0.NetAddr, consensus, true)
 	defer node.Shutdown()
 
 	// Mock for submitCh
-	posetWrapper.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-	posetWrapper.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-	posetWrapper.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
-
-	posetWrapper.EXPECT().Close().Return(nil).Times(1)
+	consensus.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	consensus.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	consensus.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
 
 	// Check submitCh case
 	message := "Test"
 	node.submitCh <- []byte(message)
 
 	// Because of we need to wait to complete submitCh.
-	time.Sleep(3 * time.Second)
+	time.Sleep(3 * time.Second) //NOTE: shit!
 
 	txPoolCount := node.core.GetTransactionPoolCount()
 	if txPoolCount != 1 {
@@ -435,7 +446,7 @@ func TestSyncProcess(t *testing.T) {
 
 	// TODO: Probably don't execute currently or we need to change return value.
 	posetWrapper2.EXPECT().GetLastEvent(gomock.Any()).Return(&poset.EventHash{}, false, nil).AnyTimes()
-	
+
 	var index map[string]poset.EventHash
 	posetWrapper2.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).Return(&poset.EventHashes{}, nil).AnyTimes()
 
@@ -448,7 +459,7 @@ func TestSyncProcess(t *testing.T) {
 		},
 	}
 	posetWrapper2.EXPECT().GetEventBlock(gomock.Any()).Return(event, nil).AnyTimes()
-	
+
 	posetWrapper2.EXPECT().GetLastBlockIndex().Return(int64(0)).AnyTimes()
 	posetWrapper2.EXPECT().GetBlock(gomock.Any()).Return(poset.Block{}, nil).AnyTimes()
 	posetWrapper2.EXPECT().NewEvent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
@@ -463,11 +474,11 @@ func TestSyncProcess(t *testing.T) {
 
 	// TODO: Probably don't execute currently or we need to change return value.
 	posetWrapper1.EXPECT().GetLastEvent(gomock.Any()).Return(&poset.EventHash{}, false, nil).AnyTimes()
-	
+
 	posetWrapper1.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).Return(&poset.EventHashes{index["e4"], index["e03"]}, nil).AnyTimes()
 
 	posetWrapper1.EXPECT().GetEventBlock(gomock.Any()).Return(event, nil).AnyTimes()
-	
+
 	posetWrapper1.EXPECT().GetLastBlockIndex().Return(int64(0)).AnyTimes()
 	posetWrapper1.EXPECT().GetBlock(gomock.Any()).Return(poset.Block{}, nil).AnyTimes()
 
@@ -547,54 +558,59 @@ func TestSyncProcess(t *testing.T) {
 */
 
 func TestSyncProcess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	// Init data
 	data := InitTestData(t, 2, 2)
+	pp := data.Peers.ToPeerSlice()
+	peer1 := pp[0]
+	peer2 := pp[1]
 
 	// Create transport
-	trans1 := createTransport(t, data.Logger, data.BackConfig, data.Adds[0],
+	trans1 := createTransport(t, data.Logger, data.BackConfig, peer1.NetAddr,
 		data.PoolSize, data.CreateFu, data.Network.CreateListener)
 	defer transportClose(t, trans1)
 
-	trans2 := createTransport(t, data.Logger, data.BackConfig, data.Adds[1],
+	trans2 := createTransport(t, data.Logger, data.BackConfig, peer2.NetAddr,
 		data.PoolSize, data.CreateFu, data.Network.CreateListener)
 	defer transportClose(t, trans2)
 
+	// Create & Init consensus
+	consensus1 := fakePoset(ctrl)
+	consensus1.EXPECT().GetEventBlock(gomock.Any()).Return(&poset.Event{}, nil).AnyTimes()
+	consensus1.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(string, int64) (*poset.EventHashes, error) {
+			//<-time.After(3 * time.Second) // timeout test
+			return &poset.EventHashes{}, nil
+		}).
+		AnyTimes()
+
+	consensus2 := fakePoset(ctrl)
+	consensus2.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	consensus2.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	consensus2.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
+
 	// Create & Init node
-	node1, posetWrapper1 := createNode(t, data.Logger, data.Config, data.PeersSlice[0].ID, data.Keys[0], data.Peers, trans1, data.Adds[0], true)
-	posetWrapper1.EXPECT().Close().Return(nil).Times(1)
+	node1 := createNode(t, data.Logger, data.Config, peer1.ID, data.Keys[peer1.ID], data.Peers, trans1, peer1.NetAddr, consensus1, true)
 	defer node1.Shutdown()
 
-	node2, posetWrapper2 := createNode(t, data.Logger, data.Config, data.PeersSlice[1].ID, data.Keys[1], data.Peers, trans2, data.Adds[1], true)
-	posetWrapper2.EXPECT().Close().Return(nil).Times(1)
+	node2 := createNode(t, data.Logger, data.Config, peer2.ID, data.Keys[peer2.ID], data.Peers, trans2, peer2.NetAddr, consensus2, true)
 	defer node2.Shutdown()
 
-	////////////////////////////////////////////////
-	
-	posetWrapper2.EXPECT().InsertEvent(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	posetWrapper2.EXPECT().SetWireInfoAndSign(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	posetWrapper2.EXPECT().GetPendingLoadedEvents().Return(int64(1)).AnyTimes()
-	
-	
 	// Submit transaction for node2
 	message := "Test"
 	node2.submitCh <- []byte(message)
 
-	////////////////////////////////////////////////
-
-	posetWrapper1.EXPECT().GetParticipantEvents(gomock.Any(), gomock.Any()).Return(&poset.EventHashes{}, nil).AnyTimes()
-	posetWrapper1.EXPECT().GetEventBlock(gomock.Any()).Return(&poset.Event{}, nil).AnyTimes()
-	
 	// Get data from node1
-	events, heights, err := node2.getUnknownEventsFromPeer(data.PeersSlice[0])
+	events, heights, err := node2.getUnknownEventsFromPeer(peer1)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatal(err)
 	}
-	
+
 	if l := len(*events); l != 0 {
 		t.Fatalf("expected %d, got %d", 0, l)
 	}
-
-	////////////////////////////////////////////////
 
 	println(heights)
 }

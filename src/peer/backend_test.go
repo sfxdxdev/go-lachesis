@@ -77,7 +77,7 @@ func TestBackendClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cli, err := peer.NewClient(rpcCli)
+	cli, err := peer.NewClient(rpcCli, conf.ProcessTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

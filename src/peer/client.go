@@ -36,6 +36,7 @@ type SyncClient interface {
 // Client is a sync client.
 type Client struct {
 	connect RPCClient
+	timeout time.Duration
 }
 
 // NewRPCClient creates new RPC client.
@@ -51,8 +52,8 @@ func NewRPCClient(
 }
 
 // NewClient creates new sync client.
-func NewClient(rpcClient RPCClient) (*Client, error) {
-	return &Client{connect: rpcClient}, nil
+func NewClient(rpcClient RPCClient, timeout time.Duration) (*Client, error) {
+	return &Client{connect: rpcClient, timeout: timeout}, nil
 }
 
 // Sync sends a sync request.
@@ -80,7 +81,10 @@ func (c *Client) Close() error {
 
 func (c *Client) call(ctx context.Context, serviceMethod string,
 	req interface{}, resp interface{}, done chan *rpc.Call) error {
+
 	call := c.connect.Go(serviceMethod, req, resp, nil)
+
+	ctx, _ = context.WithTimeout(ctx, c.timeout)
 
 	select {
 	case replay := <-call.Done:
