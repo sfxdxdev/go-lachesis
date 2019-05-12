@@ -159,6 +159,12 @@ func (s *Store) GetEventFrame(e hash.Event) *uint64 {
 	return &val
 }
 
+// GetEventFrame is a wrapper of internal GetEventFrame function
+// that returns frame num of event.
+func (p *Poset) GetEventFrame(e hash.Event) *uint64 {
+	return p.store.GetEventFrame(e)
+}
+
 // SetState stores state.
 // State is seldom readed so no cache.
 func (s *Store) SetState(st *State) {

@@ -17,6 +17,7 @@ type Node struct {
 	pub       *common.PublicKey
 	store     *Store
 	consensus Consensus
+	events    *events
 	host      string
 	conf      Config
 
@@ -49,6 +50,7 @@ func New(host string, key *common.PrivateKey, s *Store, c Consensus, conf *Confi
 		pub:       key.Public(),
 		store:     s,
 		consensus: c,
+		events:    NewOrderingEvents(),
 		host:      host,
 		conf:      *conf,
 		service:   service{listen, nil},
@@ -61,6 +63,7 @@ func New(host string, key *common.PrivateKey, s *Store, c Consensus, conf *Confi
 
 // Start starts all node services.
 func (n *Node) Start() {
+	n.OrderingEventsStart()
 	n.StartService()
 	n.StartDiscovery()
 	n.StartGossip(n.conf.GossipThreads)
@@ -69,6 +72,7 @@ func (n *Node) Start() {
 
 // Stop stops all node services.
 func (n *Node) Stop() {
+	n.OrderingEventsStop()
 	n.StopEventEmission()
 	n.StopGossip()
 	n.StopDiscovery()

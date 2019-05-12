@@ -43,7 +43,7 @@ func (n *Node) initParents() {
 		}
 		for i := from; i <= to; i++ {
 			e := n.EventOf(peer, i)
-			val := float64(1)
+			var val float64 = 1
 			if n.consensus != nil {
 				val = n.consensus.GetStakeOf(e.Creator)
 			}
@@ -51,7 +51,7 @@ func (n *Node) initParents() {
 				Creator: e.Creator,
 				Parents: e.Parents,
 				Value:   val,
-				Last:    (i == to),
+				Last:    i == to,
 			}
 		}
 	}
@@ -76,7 +76,7 @@ func (n *Node) pushPotentialParent(e *inter.Event) {
 		return
 	}
 
-	val := float64(1)
+	var val float64 = 1
 	if n.consensus != nil {
 		val = n.consensus.GetStakeOf(e.Creator)
 	}

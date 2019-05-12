@@ -30,9 +30,9 @@ type Event struct {
 
 // SignBy signs event by private key.
 func (e *Event) SignBy(priv *common.PrivateKey) error {
-	hash := e.Hash()
+	h := e.Hash()
 
-	R, S, err := priv.Sign(hash.Bytes())
+	R, S, err := priv.Sign(h.Bytes())
 	if err != nil {
 		return err
 	}
@@ -51,13 +51,13 @@ func (e *Event) Verify(pubKey *common.PublicKey) bool {
 		return false
 	}
 
-	hash := e.Hash()
+	h := e.Hash()
 	r, s, err := crypto.DecodeSignature(string(e.Sign))
 	if err != nil {
 		panic(err)
 	}
 
-	return pubKey.Verify(hash.Bytes(), r, s)
+	return pubKey.Verify(h.Bytes(), r, s)
 }
 
 // Hash calcs hash of event.
@@ -120,7 +120,7 @@ func EventHashOf(e *Event) hash.Event {
 // FakeFuzzingEvents generates random independent events for test purpose.
 func FakeFuzzingEvents() (res []*Event) {
 	creators := []hash.Peer{
-		hash.Peer{},
+		{},
 		hash.FakePeer(),
 		hash.FakePeer(),
 		hash.FakePeer(),
@@ -137,7 +137,7 @@ func FakeFuzzingEvents() (res []*Event) {
 				Creator: creators[c],
 				Parents: parents[p],
 				InternalTransactions: []*InternalTransaction{
-					&InternalTransaction{
+					{
 						Amount:   999,
 						Receiver: creators[c],
 					},

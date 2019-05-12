@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Fantom-foundation/go-lachesis/src/hash"
+	"github.com/Fantom-foundation/go-lachesis/src/inter"
 	"github.com/Fantom-foundation/go-lachesis/src/posposet/wire"
 )
 
@@ -139,10 +140,10 @@ func (ee EventsByPeer) String() string {
 func (ee EventsByPeer) ToWire() []*wire.EventDescr {
 	var arr []*wire.EventDescr
 	for creator, hh := range ee {
-		for hash := range hh {
+		for pHash := range hh {
 			arr = append(arr, &wire.EventDescr{
 				Creator: creator.Bytes(),
-				Hash:    hash.Bytes(),
+				Hash:    pHash.Bytes(),
 			})
 		}
 	}
@@ -179,7 +180,7 @@ func rootZero(node hash.Peer) EventsByPeer {
 }
 
 // rootFrom makes roots from single event.
-func rootFrom(e *Event) EventsByPeer {
+func rootFrom(e *inter.Event) EventsByPeer {
 	return EventsByPeer{
 		e.Creator: hash.NewEvents(e.Hash()),
 	}

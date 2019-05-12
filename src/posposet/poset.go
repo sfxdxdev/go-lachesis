@@ -2,7 +2,6 @@ package posposet
 
 import (
 	"sort"
-	"sync"
 
 	"github.com/Fantom-foundation/go-lachesis/src/hash"
 	"github.com/Fantom-foundation/go-lachesis/src/inter"
@@ -15,11 +14,11 @@ type Poset struct {
 	input  EventSource
 	frames map[uint64]*Frame
 
-	processingWg   sync.WaitGroup
-	processingDone chan struct{}
-
-	newEventsCh      chan hash.Event
-	incompleteEvents map[hash.Event]*Event
+	//processingWg   sync.WaitGroup
+	//processingDone chan struct{}
+	//
+	//newEventsCh      chan hash.Event
+	//incompleteEvents map[hash.Event]*Event
 
 	NewBlockCh chan uint64
 }
@@ -27,130 +26,123 @@ type Poset struct {
 // New creates Poset instance.
 // It does not start any process.
 func New(store *Store, input EventSource) *Poset {
-	const buffSize = 10
+	//const buffSize = 10
 
 	p := &Poset{
 		store:  store,
 		input:  input,
 		frames: make(map[uint64]*Frame),
-
-		newEventsCh:      make(chan hash.Event, buffSize),
-		incompleteEvents: make(map[hash.Event]*Event),
+		//
+		//newEventsCh:      make(chan hash.Event, buffSize),
+		//incompleteEvents: make(map[hash.Event]*Event),
 	}
 
 	return p
 }
 
-// Start starts events processing.
-func (p *Poset) Start() {
-	if p.processingDone != nil {
-		return
-	}
+//// Start starts events processing. It is not safe for concurrent use.
+//func (p *Poset) Start() {
+//	//if p.processingDone != nil {
+//	//	return
+//	//}
+//
+//	p.Bootstrap()
+//
+//	//p.processingDone = make(chan struct{})
+//	//p.processingWg.Add(1)
+//	//go func() {
+//	//	defer p.processingWg.Done()
+//	//	//log.Debug("Start of events processing ...")
+//	//	for {
+//	//		select {
+//	//		case <-p.processingDone:
+//	//			//log.Debug("Stop of events processing ...")
+//	//			return
+//	//		case e := <-p.newEventsCh:
+//	//			event := p.GetEvent(e)
+//	//			p.onNewEvent(event)
+//	//		}
+//	//	}
+//	//}()
+//}
+//
+//// Stop stops events processing. It is not safe for concurrent use.
+//func (p *Poset) Stop() {
+//	if p.processingDone == nil {
+//		return
+//	}
+//	close(p.processingDone)
+//	p.processingWg.Wait()
+//	p.processingDone = nil
+//}
+//
+//// PushEvent takes event into processing. Event order doesn't matter.
+//func (p *Poset) PushEvent(e hash.Event) {
+//	p.newEventsCh <- e
+//}
 
-	p.Bootstrap()
-
-	p.processingDone = make(chan struct{})
-	p.processingWg.Add(1)
-	go func() {
-		defer p.processingWg.Done()
-		//log.Debug("Start of events processing ...")
-		for {
-			select {
-			case <-p.processingDone:
-				//log.Debug("Stop of events processing ...")
-				return
-			case e := <-p.newEventsCh:
-				event := p.GetEvent(e)
-				p.onNewEvent(event)
-			}
-		}
-	}()
-}
-
-// Stop stops events processing.
-func (p *Poset) Stop() {
-	if p.processingDone == nil {
-		return
-	}
-	close(p.processingDone)
-	p.processingWg.Wait()
-	p.processingDone = nil
-}
-
-// PushEvent takes event into processing. Event order doesn't matter.
-func (p *Poset) PushEvent(e hash.Event) {
-	p.newEventsCh <- e
-}
-
-// onNewEvent runs consensus calc from new event. It is not safe for concurrent use.
-func (p *Poset) onNewEvent(e *Event) {
-	if p.store.GetEventFrame(e.Hash()) != nil {
-		log.WithField("event", e).Warnf("Event had received already")
-		return
-	}
-
-	if e.parents == nil {
-		e.parents = make(map[hash.Event]*Event, len(e.Parents))
-		for hash := range e.Parents {
-			e.parents[hash] = nil
-		}
-	}
-
-	// TODO: move validation to level up for sync error
-	nodes := newParentsValidator(e)
-	ltime := newLamportTimeValidator(e)
-
-	// fill event's parents index or hold it as incompleted
-	for pHash := range e.Parents {
-		if pHash.IsZero() {
-			// first event of node
-			if !nodes.IsParentUnique(e.Creator) {
-				return
-			}
-			if !ltime.IsGreaterThan(0) {
-				return
-			}
-			continue
-		}
-		parent := e.parents[pHash]
-		if parent == nil {
-			if p.store.GetEventFrame(pHash) == nil {
-				//log.WithField("event", e).Debug("Event's parent has not received yet")
-				p.incompleteEvents[e.Hash()] = e
-				return
-			}
-			parent = p.GetEvent(pHash)
-			e.parents[pHash] = parent
-		}
-		if !nodes.IsParentUnique(parent.Creator) {
-			return
-		}
-		if !ltime.IsGreaterThan(parent.LamportTime) {
-			return
-		}
-	}
-	if !nodes.HasSelfParent() {
-		return
-	}
-	if !ltime.IsSequential() {
-		return
-	}
-
-	// parents OK
-	p.consensus(e)
-
-	// now child events may become complete, check it again
-	for hash, child := range p.incompleteEvents {
-		if parent, ok := child.parents[e.Hash()]; ok && parent == nil {
-			child.parents[e.Hash()] = e
-			delete(p.incompleteEvents, hash)
-			p.onNewEvent(child)
-		}
-	}
-}
+//// onNewEvent runs consensus calc from new event. It is not safe for concurrent use.
+//func (p *Poset) onNewEvent(e *Event) {
+//	if p.store.GetEventFrame(e.Hash()) != nil {
+//		log.WithField("event", e).Warnf("Event had received already")
+//		return
+//	}
+//
+//	if e.parents == nil {
+//		e.parents = make(map[hash.Event]*Event, len(e.Parents))
+//		for pHash := range e.Parents {
+//			e.parents[pHash] = nil
+//		}
+//	}
+//
+//	// TODO: move validation to level up for sync error
+//	validate := newEventsOrderingValidator(e)
+//	//nodes := newParentsValidator(e)
+//	//ltime := newLamportTimeValidator(e)
+//
+//	// fill event's parents index or hold it as incompleted
+//	for pHash := range e.Parents {
+//		if pHash.IsZero() {
+//			// first event of node
+//			if !validate.IsValidTime(e.Creator, 0) {
+//				return
+//			}
+//			continue
+//		}
+//
+//		parent := e.parents[pHash]
+//		if parent== nil {
+//			if p.store.GetEventFrame(pHash) == nil {
+//				p.incompleteEvents[e.Hash()] = e
+//				return
+//			}
+//			parent = p.GetEvent(pHash)
+//			e.parents[pHash] = parent
+//		}
+//		if !validate.IsValidTime(parent.Creator, parent.LamportTime) {
+//			return
+//		}
+//	}
+//
+//	if !validate.IsValidCreator() {
+//		return
+//	}
+//
+//	// parents OK
+//	p.Consensus(&e.Event)
+//
+//	// now child events may become complete, check it again
+//	for hash, child := range p.incompleteEvents {
+//		if parent, ok := child.parents[e.Hash()]; ok && parent == nil {
+//			child.parents[e.Hash()] = e
+//			delete(p.incompleteEvents, hash)
+//			p.onNewEvent(child)
+//		}
+//	}
+//}
 
 // consensus is not safe for concurrent use.
-func (p *Poset) consensus(e *Event) {
+func (p *Poset) Consensus(e *inter.Event) {
 	const X = 3 // TODO: remove this magic number
 
 	var frame *Frame
@@ -202,7 +194,7 @@ func (p *Poset) consensus(e *Event) {
 // checkIfRoot checks root-conditions for new event
 // and returns frame where event is root.
 // It is not safe for concurrent use.
-func (p *Poset) checkIfRoot(e *Event) *Frame {
+func (p *Poset) checkIfRoot(e *inter.Event) *Frame {
 	//log.Debugf("----- %s", e)
 	knownRoots := eventsByFrame{}
 	minFrame := p.state.LastFinishedFrameN + 1
@@ -254,7 +246,7 @@ func (p *Poset) checkIfRoot(e *Event) *Frame {
 
 // setClothoCandidates checks clotho-conditions for seen by new root.
 // It is not safe for concurrent use.
-func (p *Poset) setClothoCandidates(root *Event, frame *Frame) {
+func (p *Poset) setClothoCandidates(root *inter.Event, frame *Frame) {
 	// check Clotho Candidates in previous frame
 	prev := p.frame(frame.Index-1, false)
 	// events from previous frame, reachable by root
@@ -366,22 +358,22 @@ func (p *Poset) topologicalOrdered(frameNum uint64) (chain Events) {
 
 // collectParents recursive collects Events of Atropos.
 func (p *Poset) collectParents(a *Event, res *Events, already hash.Events) {
-	for hash := range a.Parents {
-		if hash.IsZero() {
+	for pHash := range a.Parents {
+		if pHash.IsZero() {
 			continue
 		}
-		if already.Contains(hash) {
+		if already.Contains(pHash) {
 			continue
 		}
-		f, _ := p.FrameOfEvent(hash)
-		if _, ok := f.Atroposes[hash]; ok {
+		f, _ := p.FrameOfEvent(pHash)
+		if _, ok := f.Atroposes[pHash]; ok {
 			continue
 		}
 
-		e := p.GetEvent(hash)
+		e := p.GetEvent(pHash)
 		e.consensusTime = a.consensusTime
 		*res = append(*res, e)
-		already.Add(hash)
+		already.Add(pHash)
 		p.collectParents(e, res, already)
 	}
 }
@@ -427,9 +419,7 @@ func (p *Poset) reconsensusFromFrame(start uint64) {
 	}
 	// recalc consensus
 	for _, e := range all.ByParents() {
-		p.consensus(&Event{
-			Event: *e,
-		})
+		p.Consensus(e)
 	}
 	// foreach fresh frame
 	for n := start; n <= stop; n++ {

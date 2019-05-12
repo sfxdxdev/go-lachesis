@@ -56,7 +56,8 @@ func makeLachesis(db *badger.DB, host string, key *common.PrivateKey, conf *Conf
 func (l *Lachesis) Start(genesis map[hash.Peer]uint64) {
 	l.init(genesis)
 
-	l.consensus.Start()
+	//l.consensus.Start()
+	l.consensus.Bootstrap()
 	l.node.Start()
 	l.serviceStart()
 }
@@ -65,7 +66,7 @@ func (l *Lachesis) Start(genesis map[hash.Peer]uint64) {
 func (l *Lachesis) Stop() {
 	l.serviceStop()
 	l.node.Stop()
-	l.consensus.Stop()
+	//l.consensus.Stop()
 }
 
 // AddPeers suggests hosts for network discovery.
