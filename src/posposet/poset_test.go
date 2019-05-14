@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/Fantom-foundation/go-lachesis/src/hash"
 )
 
 func TestPoset(t *testing.T) {
@@ -15,34 +17,34 @@ func TestPoset(t *testing.T) {
 		posets[i], _, inputs[i] = FakePoset(nodes)
 	}
 
-	//t.Run("Multiple start", func(t *testing.T) {
-	//	posets[0].Stop()
-	//	posets[0].Start()
-	//	posets[0].Start()
-	//})
-	//
-	//t.Run("Push unordered events", func(t *testing.T) {
-	//	// first all events from one node
-	//	for n := 0; n < len(nodes); n++ {
-	//		events := nodesEvents[nodes[n]]
-	//		for _, e := range events {
-	//			inputs[n].SetEvent(&e.Event)
-	//			posets[n].PushEventSync(e.Hash())
-	//		}
-	//	}
-	//	// second all events from others
-	//	for n := 0; n < len(nodes); n++ {
-	//		events := nodesEvents[nodes[n]]
-	//		for _, e := range events {
-	//			for i := 0; i < len(posets); i++ {
-	//				if i != n {
-	//					inputs[i].SetEvent(&e.Event)
-	//					posets[i].PushEventSync(e.Hash())
-	//				}
-	//			}
-	//		}
-	//	}
-	//})
+	t.Run("Multiple start", func(t *testing.T) {
+		posets[0].Stop()
+		posets[0].Start()
+		posets[0].Start()
+	})
+
+	t.Run("Push unordered events", func(t *testing.T) {
+		// first all events from one node
+		for n := 0; n < len(nodes); n++ {
+			events := nodesEvents[nodes[n]]
+			for _, e := range events {
+				inputs[n].SetEvent(&e.Event)
+				posets[n].PushEventSync(e.Hash())
+			}
+		}
+		// second all events from others
+		for n := 0; n < len(nodes); n++ {
+			events := nodesEvents[nodes[n]]
+			for _, e := range events {
+				for i := 0; i < len(posets); i++ {
+					if i != n {
+						inputs[i].SetEvent(&e.Event)
+						posets[i].PushEventSync(e.Hash())
+					}
+				}
+			}
+		}
+	})
 
 	t.Run("All events in Store", func(t *testing.T) {
 		assert := assert.New(t)
@@ -74,19 +76,19 @@ func TestPoset(t *testing.T) {
 		}
 	})
 
-	//t.Run("Multiple stop", func(t *testing.T) {
-	//	posets[0].Stop()
-	//	posets[0].Stop()
-	//})
+	t.Run("Multiple stop", func(t *testing.T) {
+		posets[0].Stop()
+		posets[0].Stop()
+	})
 }
 
-///*
-// * Poset's test methods:
-// */
-//
-//// PushEventSync takes event into processing. It's a sync version of Poset.PushEvent().
-//// Event order doesn't matter.
-//func (p *Poset) PushEventSync(e hash.Event) {
-//	event := p.GetEvent(e)
-//	p.onNewEvent(event)
-//}
+/*
+ * Poset's test methods:
+ */
+
+// PushEventSync takes event into processing. It's a sync version of Poset.PushEvent().
+// Event order doesn't matter.
+func (p *Poset) PushEventSync(e hash.Event) {
+	event := p.GetEvent(e)
+	p.onNewEvent(event)
+}

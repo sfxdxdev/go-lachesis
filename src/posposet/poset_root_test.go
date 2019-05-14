@@ -117,12 +117,12 @@ func testSpecialNamedRoots(t *testing.T, asciiScheme string) {
 	assert := assert.New(t)
 	// init
 	nodes, _, names := inter.ParseEvents(asciiScheme)
-	p, _, _ := FakePoset(nodes)
+	p, _, input := FakePoset(nodes)
 	// process events
-	//for _, event := range names {
-	//	input.SetEvent(event)
-	//	p.PushEventSync(event.Hash())
-	//}
+	for _, event := range names {
+		input.SetEvent(event)
+		p.PushEventSync(event.Hash())
+	}
 	// check each
 	for name, event := range names {
 		// check root

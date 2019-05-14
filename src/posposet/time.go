@@ -28,8 +28,8 @@ func WireToTimestampsByEvent(arr map[string]uint64) TimestampsByEvent {
 	res := make(TimestampsByEvent, len(arr))
 
 	for hex, t := range arr {
-		pHash := hash.HexToEventHash(hex)
-		res[pHash] = inter.Timestamp(t)
+		hash := hash.HexToEventHash(hex)
+		res[hash] = inter.Timestamp(t)
 	}
 
 	return res
@@ -71,37 +71,41 @@ func (c timeCounter) MaxMin() inter.Timestamp {
  * Event's lamport time validator:
  */
 
-//type lamportTimeValidator struct {
-//	event   *Event
-//	maxTime inter.Timestamp
-//}
-//
-//func newLamportTimeValidator(e *Event) *lamportTimeValidator {
-//	return &lamportTimeValidator{
-//		event:   e,
-//		maxTime: 0,
-//	}
-//}
-//
-//func (v *lamportTimeValidator) IsGreaterThan(time inter.Timestamp) bool {
-//	if v.event.LamportTime <= time {
-//		log.Warnf("Event %s has lamport time %d. It isn't next of parents, so rejected",
-//			v.event.Hash().String(),
-//			v.event.LamportTime)
-//		return false
-//	}
-//	if v.maxTime < time {
-//		v.maxTime = time
-//	}
-//	return true
-//}
-//
-//func (v *lamportTimeValidator) IsSequential() bool {
-//	if v.event.LamportTime != v.maxTime+1 {
-//		log.Warnf("Event %s has lamport time %d. It is too far from parents, so rejected",
-//			v.event.Hash().String(),
-//			v.event.LamportTime)
-//		return false
-//	}
-//	return true
-//}
+type lamportTimeValidator struct {
+	event   *Event
+	maxTime inter.Timestamp
+}
+
+func newLamportTimeValidator(e *Event) *lamportTimeValidator {
+	return &lamportTimeValidator{
+		event:   e,
+		maxTime: 0,
+	}
+}
+
+func (v *lamportTimeValidator) IsGreaterThan(time inter.Timestamp) bool {
+	if v.event.LamportTime <= time {
+		log.Warnf("Event %s has lamport time %d. It isn't next of parents, so rejected",
+			v.event.Hash().String(),
+			v.event.LamportTime)
+		return false
+	}
+	if v.maxTime < time {
+		v.maxTime = time
+	}
+	return true
+}
+
+func (v *lamportTimeValidator) IsSequential() bool {
+	if v.event.LamportTime != v.maxTime+1 {
+		log.Warnf("Event %s has lamport time %d. It is too far from parents, so rejected",
+			v.event.Hash().String(),
+			v.event.LamportTime)
+		return false
+	}
+	return true
+}
+
+func (v *lamportTimeValidator) GetNext() inter.Timestamp {
+	return v.maxTime + 1
+}

@@ -95,23 +95,23 @@ func testSpecialNamedAtropos(t *testing.T, tryRestoring bool, asciiScheme string
 	assert := assert.New(t)
 	// init
 	nodes, _, names := inter.ParseEvents(asciiScheme)
-	p, _, _ := FakePoset(nodes)
+	p, store, input := FakePoset(nodes)
 	// process events
-	//n := 0
-	//for _, event := range names {
-	//	input.SetEvent(event)
-	//	p.PushEventSync(event.Hash())
-	//	n++
-	//	if tryRestoring && n == len(names)*2/3 {
-	//		ee := p.incompleteEvents
-	//		p = New(store, input)
-	//		p.Bootstrap()
-	//		for _, e := range ee {
-	//			input.SetEvent(&e.Event)
-	//			p.PushEventSync(e.Hash())
-	//		}
-	//	}
-	//}
+	n := 0
+	for _, event := range names {
+		input.SetEvent(event)
+		p.PushEventSync(event.Hash())
+		n++
+		if tryRestoring && n == len(names)*2/3 {
+			ee := p.incompleteEvents
+			p = New(store, input)
+			p.Bootstrap()
+			for _, e := range ee {
+				input.SetEvent(&e.Event)
+				p.PushEventSync(e.Hash())
+			}
+		}
+	}
 	// check each event
 	for name, event := range names {
 		// check root

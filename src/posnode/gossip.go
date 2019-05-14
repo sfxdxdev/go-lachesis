@@ -148,7 +148,7 @@ func (n *Node) checkParents(client api.NodeClient, peer *Peer, parents hash.Even
 		var req api.EventRequest
 		req.Hash = e.Bytes()
 
-		_, _ = n.downloadEvent(client, peer, &req)
+		n.downloadEvent(client, peer, &req)
 	}
 }
 
@@ -234,11 +234,8 @@ func (n *Node) saveNewEvent(e *inter.Event) {
 	n.store.SetPeerHeight(e.Creator, e.Index)
 
 	if n.consensus != nil {
-		//n.consensus.PushEvent(e.Hash())
-		n.orderingEvents(e)
+		n.consensus.PushEvent(e.Hash())
 	}
-
-	// СОРТИРОВКА (posnode) <- ВЫЗОВ КОНСЕСУСА
 
 	n.pushPotentialParent(e)
 }
