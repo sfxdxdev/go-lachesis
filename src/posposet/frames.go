@@ -52,6 +52,9 @@ func (p *Poset) FrameOfEvent(event hash.Event) (frame *Frame, isRoot bool) {
 	}
 
 	frame = p.frame(*fnum, false)
+	if frame == nil {
+		return
+	}
 	knowns := frame.FlagTable[event]
 	for _, events := range knowns {
 		if events.Contains(event) {

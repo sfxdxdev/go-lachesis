@@ -91,8 +91,8 @@ func (p *Poset) onNewEvent(e *Event) {
 
 	if e.parents == nil {
 		e.parents = make(map[hash.Event]*Event, len(e.Parents))
-		for hash := range e.Parents {
-			e.parents[hash] = nil
+		for pHash := range e.Parents {
+			e.parents[pHash] = nil
 		}
 	}
 
@@ -137,20 +137,20 @@ func (p *Poset) onNewEvent(e *Event) {
 	}
 
 	// parents OK
-	p.consensus(e)
+	p.consensus(&e.Event)
 
 	// now child events may become complete, check it again
-	for hash, child := range p.incompleteEvents {
+	for pHash, child := range p.incompleteEvents {
 		if parent, ok := child.parents[e.Hash()]; ok && parent == nil {
 			child.parents[e.Hash()] = e
-			delete(p.incompleteEvents, hash)
+			delete(p.incompleteEvents, pHash)
 			p.onNewEvent(child)
 		}
 	}
 }
 
 // consensus is not safe for concurrent use.
-func (p *Poset) consensus(e *Event) {
+func (p *Poset) consensus(e *inter.Event) {
 	const X = 3 // TODO: remove this magic number
 
 	var frame *Frame
@@ -202,7 +202,7 @@ func (p *Poset) consensus(e *Event) {
 // checkIfRoot checks root-conditions for new event
 // and returns frame where event is root.
 // It is not safe for concurrent use.
-func (p *Poset) checkIfRoot(e *Event) *Frame {
+func (p *Poset) checkIfRoot(e *inter.Event) *Frame {
 	//log.Debugf("----- %s", e)
 	knownRoots := eventsByFrame{}
 	minFrame := p.state.LastFinishedFrameN + 1
@@ -254,7 +254,7 @@ func (p *Poset) checkIfRoot(e *Event) *Frame {
 
 // setClothoCandidates checks clotho-conditions for seen by new root.
 // It is not safe for concurrent use.
-func (p *Poset) setClothoCandidates(root *Event, frame *Frame) {
+func (p *Poset) setClothoCandidates(root *inter.Event, frame *Frame) {
 	// check Clotho Candidates in previous frame
 	prev := p.frame(frame.Index-1, false)
 	// events from previous frame, reachable by root
@@ -366,22 +366,25 @@ func (p *Poset) topologicalOrdered(frameNum uint64) (chain Events) {
 
 // collectParents recursive collects Events of Atropos.
 func (p *Poset) collectParents(a *Event, res *Events, already hash.Events) {
-	for hash := range a.Parents {
-		if hash.IsZero() {
+	for pHash := range a.Parents {
+		if pHash.IsZero() {
 			continue
 		}
-		if already.Contains(hash) {
+		if already.Contains(pHash) {
 			continue
 		}
-		f, _ := p.FrameOfEvent(hash)
-		if _, ok := f.Atroposes[hash]; ok {
+		f, _ := p.FrameOfEvent(pHash)
+		if f == nil {
+			continue
+		}
+		if _, ok := f.Atroposes[pHash]; ok {
 			continue
 		}
 
-		e := p.GetEvent(hash)
+		e := p.GetEvent(pHash)
 		e.consensusTime = a.consensusTime
 		*res = append(*res, e)
-		already.Add(hash)
+		already.Add(pHash)
 		p.collectParents(e, res, already)
 	}
 }
@@ -426,10 +429,9 @@ func (p *Poset) reconsensusFromFrame(start uint64) {
 		}
 	}
 	// recalc consensus
-	for _, e := range all.ByParents() {
-		p.consensus(&Event{
-			Event: *e,
-		})
+	ordered := all.ByParents()
+	for _, e := range ordered {
+		p.consensus(e)
 	}
 	// foreach fresh frame
 	for n := start; n <= stop; n++ {
