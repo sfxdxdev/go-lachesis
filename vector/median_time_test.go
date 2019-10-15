@@ -76,8 +76,8 @@ func TestMedianTimeAscii(t *testing.T) {
  nodeA003════─╫─══════════─╫─═══════════╣
  ║            ║            ║
  ╠════════════nodeB002     ║
- ║                         ║
- ╠═════════════════════════nodeC002
+ ║            ║            ║
+ ╠════════════╫═══════════ nodeC002
 `
 
 	weights := []pos.Stake{3, 4, 2, 1}
@@ -104,7 +104,7 @@ func TestMedianTimeAscii(t *testing.T) {
 		"nodeA012": genesisTime,
 		"nodeA003": inter.Timestamp(112),
 		"nodeB002": inter.Timestamp(124),
-		"nodeC002": inter.Timestamp(20),
+		"nodeC002": inter.Timestamp(112),
 	}
 	t.Run("medianTimeWithForks", func(t *testing.T) {
 		testMedianTime(t, dagStr, weights, claimedTimes, medianTimes, genesisTime)
